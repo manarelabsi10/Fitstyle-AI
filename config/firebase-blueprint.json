@@ -1,0 +1,47 @@
+{
+  "entities": {
+    "Product": {
+      "title": "Catalogue Product",
+      "description": "A garment item in the retailer's catalog",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "category": { "type": "string", "enum": ["top", "bottom", "footwear", "accessories"] },
+        "occasion": { "type": "string", "enum": ["Wedding", "Casual", "Formal", "Party", "Interview"] },
+        "size": { "type": "string" },
+        "price": { "type": "number" },
+        "image": { "type": "string" },
+        "colour": { "type": "string" }
+      },
+      "required": ["name", "category", "occasion", "size", "price", "image"]
+    },
+    "User": {
+      "title": "User Account Profile",
+      "description": "User profile with role-based access control metadata",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "fullName": { "type": "string" },
+        "role": { "type": "string", "enum": ["shopper", "owner"] },
+        "wishlist": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Array of hearted/saved product IDs"
+        }
+      },
+      "required": ["uid", "email", "role"]
+    }
+  },
+  "firestore": {
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Retail apparel catalog managed by store owners and queried by shoppers"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Authenticated user profiles (shoppers and store owners)"
+    }
+  }
+}

@@ -1,0 +1,33 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Default: Deny all
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    // Allow authenticated users to read all product images
+    match /products/{productId}/{fileName} {
+      allow read: if request.auth != null;
+    }
+
+    // Allow authenticated store owners to upload product images
+    match /products/{productId}/{fileName} {
+      allow write: if request.auth != null && 
+        (request.auth.token.email == 'dpqusd250103@debi.eui.edu.eg' ||
+         request.auth.token.email.matches('(?i).*\\.debi\\.eui\\.edu\\.eg$') ||
+         request.auth.token.email.matches('(?i).*\\.edu\\.eg$') ||
+         request.auth.token.email.matches('(?i).*@fitstyle\\.ai$'));
+    }
+
+    // Allow authenticated users to upload temporary files (like fitting room photos)
+    match /temp/{userId}/{fileName} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Allow authenticated users to upload wardrobe items
+    match /wardrobe/{userId}/{itemId}/{fileName} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}

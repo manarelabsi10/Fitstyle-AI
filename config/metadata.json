@@ -1,0 +1,6 @@
+{
+  "name": "FitStyle AI",
+  "description": "Virtual Fitting Studio & Styling Advisor. Upload photos, map body keypoints, calibrate proportions, filter catalogs dynamically by occasion and size, trigger virtual outerwear overlays, and export customized styling reports to PDF.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

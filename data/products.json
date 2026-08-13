@@ -1,0 +1,102 @@
+[
+  {
+    "id": "prod-cas-blouse",
+    "name": "Cream Silk Bow-Neck Blouse",
+    "category": "top",
+    "colour": "Cream",
+    "occasion": "Casual",
+    "size": "S, M, L, XL",
+    "price": 110,
+    "image": "/src/assets/images/cream_bow_blouse.png"
+  },
+  {
+    "id": "prod-cas-trousers",
+    "name": "Olive Green Wide-Leg Trousers",
+    "category": "bottom",
+    "colour": "Olive Green",
+    "occasion": "Casual",
+    "size": "S, M, L",
+    "price": 95,
+    "image": "/src/assets/images/olive_wide_pants.png"
+  },
+  {
+    "id": "prod-cas-polka-dress",
+    "name": "Polka Dot Bustier Dress",
+    "category": "top",
+    "colour": "Black & White",
+    "occasion": "Casual",
+    "size": "XS, S, M, L",
+    "price": 125,
+    "image": "/src/assets/images/polka_dot_dress.png"
+  },
+  {
+    "id": "prod-wed-dress",
+    "name": "Elegant White Silk Wedding Gown",
+    "category": "top",
+    "colour": "White",
+    "occasion": "Wedding",
+    "size": "XS, S, M, L, XL",
+    "price": 850,
+    "image": "/src/assets/images/wedding.jpeg"
+  },
+  {
+    "id": "prod-wed-dress-2",
+    "name": "White Floral Strapless Wedding Dress",
+    "category": "top",
+    "colour": "White",
+    "occasion": "Wedding",
+    "size": "XS, S, M, L, XL",
+    "price": 780,
+    "image": "/src/assets/images/wedding_dress_1.png"
+  },
+  {
+    "id": "prod-wed-dress-3",
+    "name": "White Textured A-Line Wedding Gown",
+    "category": "top",
+    "colour": "White",
+    "occasion": "Wedding",
+    "size": "XS, S, M, L, XL",
+    "price": 820,
+    "image": "/src/assets/images/wedding_dress_2.png"
+  },
+  {
+    "id": "prod-wed-dress-4",
+    "name": "White Spaghetti Strap Bridal Dress",
+    "category": "top",
+    "colour": "White",
+    "occasion": "Wedding",
+    "size": "XS, S, M, L, XL",
+    "price": 790,
+    "image": "/src/assets/images/wedding_dress_3.png"
+  },
+  {
+    "id": "prod-wed-dress-5",
+    "name": "Ivory Lace Mermaid Bridal Gown",
+    "category": "top",
+    "colour": "Ivory",
+    "occasion": "Wedding",
+    "size": "XS, S, M, L, XL",
+    "price": 920,
+    "image": "/src/assets/images/wedding.jpeg"
+  },
+  {
+    "id": "prod-wed-dress-6",
+    "name": "White Ruffle Off-Shoulder Bridal Ball Gown",
+    "category": "top",
+    "colour": "White",
+    "occasion": "Wedding",
+    "size": "XS, S, M, L, XL",
+    "price": 860,
+    "image": "/src/assets/images/wedding_dress_ruffle.jpeg"
+  },
+  {
+    "id": "prod-wed-dress-7",
+    "name": "Ivory Lace Sleeve Tea-Length Wedding Dress",
+    "category": "top",
+    "colour": "Ivory",
+    "occasion": "Wedding",
+    "size": "XS, S, M, L, XL",
+    "price": 895,
+    "image": "/src/assets/images/wedding_dress_lace.jpeg"
+  }
+]

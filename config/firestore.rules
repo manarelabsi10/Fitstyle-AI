@@ -1,0 +1,94 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- PRIMITIVE DEFINITIONS & HELPERS ---
+
+    // Helper: Incoming data representation
+    function incoming() {
+      return request.resource.data;
+    }
+
+    // Helper: Existing data representation
+    function existing() {
+      return resource.data;
+    }
+
+    // Helper: Is the user authenticated?
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Helper: Validate Document ID limits
+    function isValidId(id) {
+       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Helper: Does the requesting user ID match the target resource user ID?
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Helper: Does the authenticated user have the admin/owner role?
+    // Check email first (Zero reads) to avoid infinite recursion and massive read costs
+    function isStoreOwner() {
+      return isSignedIn() && 
+        ('email' in request.auth.token) && 
+        (
+          request.auth.token.email == 'dpqusd250103@debi.eui.edu.eg' ||
+          request.auth.token.email.matches('(?i).*\\.debi\\.eui\\.edu\\.eg$') ||
+          request.auth.token.email.matches('(?i).*\\.edu\\.eg$') ||
+          request.auth.token.email.matches('(?i).*@fitstyle\\.ai$')
+        );
+    }
+
+    // --- BLUEPRINT ENTITY VALIDATIONS ---
+
+    function isValidUser(data) {
+      return data.uid is string && data.uid.size() <= 128
+        && data.email is string && data.email.size() <= 256
+        && data.fullName is string && data.fullName.size() <= 256
+        && data.role is string && (data.role == 'shopper' || data.role == 'owner')
+        && (!('wishlist' in data) || (data.wishlist is list && data.wishlist.size() <= 100));
+    }
+
+    function isValidProduct(data) {
+      return data.name is string && data.name.size() <= 500
+        && (data.price is int || data.price is float);
+    }
+
+    // --- COLLECTION ACCESS RULES ---
+
+    // 1. Products collection rules
+    match /products/{productId} {
+      allow read, write: if true;
+    }
+
+    // 2. Users core collection rules
+    match /users/{userId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow read: if isStoreOwner();
+      allow create: if isOwner(userId) && isValidUser(incoming());
+      allow update: if isOwner(userId) && isValidUser(incoming());
+      allow update: if isStoreOwner() && isValidUser(incoming());
+      allow delete: if isStoreOwner();
+
+      // Nested bodyProfile collection rules
+      match /bodyProfile/{profileId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+        allow read, write: if isStoreOwner();
+      }
+
+      // Nested orderHistory collection rules
+      match /orderHistory/{orderId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+        allow read, write: if isStoreOwner();
+      }
+    }
+  }
+}
