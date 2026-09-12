@@ -12,3 +12,15 @@ coverage/
 
 # Secrets & credentials
 config/serviceAccountKey.json
+
+# Terraform state 
+infra/terraform.tfstate
+infra/terraform.tfstate.backup
+infra/.terraform/
+infra/.terraform.lock.hcl
+
+
+catalog_export.json
+failed_products.json
+
+.env.local
