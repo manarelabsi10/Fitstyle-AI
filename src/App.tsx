@@ -5,7 +5,7 @@ import AdminDashboard from "./components/AdminDashboard";
 import LandingPage from "./components/LandingPage";
 import { Product, UserProfile } from "./types";
 import { db, auth } from "./firebase";
-import { collection, getDocs, doc, getDoc, setDoc, deleteDoc } from "firebase/firestore";
+import { doc, getDoc, setDoc } from "firebase/firestore";
 import { signOut, onAuthStateChanged } from "firebase/auth";
 import { STATIC_FALLBACK_PRODUCTS } from "./data/fallbackProducts";
 
@@ -66,168 +66,15 @@ export default function App() {
       }
     });
 
-    // Load items from Firestore Products collection
+    // Load items from our DynamoDB-backed API (server.ts -> DynamoDB Products table)
     const fetchCatalog = async () => {
       try {
-        const prodColRef = collection(db, "products");
-        const snap = await getDocs(prodColRef);
-        const list: Product[] = snap.docs.map((doc) => {
-          const data = doc.data();
-          const firstOccasion = data.occasions && data.occasions.length > 0 ? data.occasions[0] : (data.occasion || "Wedding");
-          
-          const rawCat = data.category || "top";
-          let normalizedCategory: any = "top";
-          if (rawCat === "Shoes" || rawCat === "footwear" || rawCat.toLowerCase() === "shoes" || rawCat.toLowerCase() === "footwear") {
-            normalizedCategory = "footwear";
-          } else if (rawCat === "Accessories" || rawCat === "accessories" || rawCat.toLowerCase() === "accessories") {
-            normalizedCategory = "accessories";
-          } else if (
-            rawCat === "Wedding" || rawCat === "Party" || rawCat === "Casual" || rawCat === "Formal" ||
-            rawCat.toLowerCase() === "wedding" || rawCat.toLowerCase() === "party" || rawCat.toLowerCase() === "casual" || rawCat.toLowerCase() === "formal"
-          ) {
-            const nameLower = (data.name || "").toLowerCase();
-            if (
-              nameLower.includes("skirt") || 
-              nameLower.includes("jeans") || 
-              nameLower.includes("pants") || 
-              nameLower.includes("trousers") || 
-              nameLower.includes("shorts") || 
-              nameLower.includes("bottom")
-            ) {
-              normalizedCategory = "bottom";
-            } else {
-              normalizedCategory = "top";
-            }
-          } else {
-            normalizedCategory = rawCat;
-          }
-
-          const parsedSize = data.size || (data.sizes && Array.isArray(data.sizes) ? data.sizes.join(", ") : "M");
-
-          return {
-            id: doc.id,
-            name: data.name || "Bespoke Garment",
-            category: normalizedCategory,
-            colour: data.colour || data.color || "Bespoke",
-            occasion: firstOccasion as any,
-            size: parsedSize,
-            price: typeof data.price === "number" ? data.price : Number(data.price) || 120,
-            image: data.imageUrl || data.image || "https://images.unsplash.com/photo-1595777457583-95e059d581b8?auto=format&fit=crop&q=80&w=600",
-            shapes: data.shapes || ["Hourglass", "Pear", "Apple", "Rectangle", "Inverted Triangle"],
-            occasions: data.occasions || [firstOccasion],
-            inStock: data.inStock !== false
-          };
-        });
-
-        if (list.length > 0) {
-          // Merge any missing static fallback products into the live catalogue so new items
-          // like the party jumpsuit are available even when Firestore is already populated.
-          const missingFallbackProducts = STATIC_FALLBACK_PRODUCTS.filter((fallback) =>
-            !list.some((item) => item.id === fallback.id)
-          );
-          if (missingFallbackProducts.length > 0) {
-            list.push(...missingFallbackProducts);
-          }
-
-          const hasLegacyProducts = list.some(item => 
-            !STATIC_FALLBACK_PRODUCTS.some(sp => sp.id === item.id)
-          );
-
-          if (hasLegacyProducts) {
-            console.log("Legacy products detected in Firestore. Purging old items and seeding new women-only catalog...");
-            // 1. Delete outdated products from Firestore
-            for (const item of list) {
-              try {
-                await deleteDoc(doc(db, "products", item.id));
-              } catch (delErr) {
-                console.warn(`Failed to delete outdated product ${item.id}`, delErr);
-              }
-            }
-
-            // 2. Seed clean new women-only catalog into Firestore
-            const newlySeeded: Product[] = [];
-            for (const sp of STATIC_FALLBACK_PRODUCTS) {
-              try {
-                const docRef = doc(db, "products", sp.id);
-                await setDoc(docRef, {
-                  name: sp.name,
-                  category: sp.category,
-                  imageUrl: sp.image,
-                  price: sp.price,
-                  occasions: sp.occasions || [sp.occasion],
-                  shapes: sp.shapes || ["Hourglass", "Pear", "Apple", "Rectangle", "Inverted Triangle"],
-                  colour: sp.colour || "Bespoke",
-                  size: sp.size || "M",
-                  inStock: sp.inStock !== false
-                });
-                newlySeeded.push(sp);
-              } catch (seedErr) {
-                console.warn(`Pre-seeding product ${sp.name} into Firestore failed`, seedErr);
-              }
-            }
-            // Fallback set in case some Firestore requests throttled/failed in dev sandbox environment
-            setProducts(newlySeeded.length > 0 ? newlySeeded : STATIC_FALLBACK_PRODUCTS);
-          } else {
-            // Sync any wrong or outdated images to Firestore automatically
-            const syncedList: Product[] = [];
-            for (const item of list) {
-              // Find correct image by matching name (case-insensitive) or id from verified static products
-              const staticMatch = STATIC_FALLBACK_PRODUCTS.find(
-                (sp) => sp.id === item.id || sp.name.toLowerCase() === item.name.toLowerCase()
-              );
-
-              if (staticMatch && item.image !== staticMatch.image && !item.image.includes("placehold.co")) {
-                const updatedItem = { ...item, image: staticMatch.image };
-                syncedList.push(updatedItem);
-                
-                // Asynchronously update Firestore to propagate verified image
-                try {
-                  const docRef = doc(db, "products", item.id);
-                  await setDoc(docRef, {
-                    name: item.name,
-                    category: item.category,
-                    imageUrl: staticMatch.image,
-                    price: item.price,
-                    occasions: item.occasions || [item.occasion],
-                    shapes: item.shapes || ["Hourglass", "Pear", "Apple", "Rectangle", "Inverted Triangle"],
-                    colour: item.colour || "Bespoke",
-                    size: item.size || "M",
-                    inStock: item.inStock !== false,
-                    badge: null // Remove any extra status/badge from Firestore if present
-                  }, { merge: true });
-                } catch (updateErr) {
-                  console.warn(`Firestore background sync failed for product: ${item.name}`, updateErr);
-                }
-              } else {
-                syncedList.push(item);
-              }
-            }
-            setProducts(syncedList);
-          }
-        } else {
-          // If Firestore is empty, seed verified list
-          setProducts(STATIC_FALLBACK_PRODUCTS);
-          for (const sp of STATIC_FALLBACK_PRODUCTS) {
-            try {
-              const docRef = doc(db, "products", sp.id);
-              await setDoc(docRef, {
-                name: sp.name,
-                category: sp.category,
-                imageUrl: sp.image,
-                price: sp.price,
-                occasions: sp.occasions || [sp.occasion],
-                shapes: sp.shapes || ["Hourglass", "Pear", "Apple", "Rectangle", "Inverted Triangle"],
-                colour: sp.colour || "Bespoke",
-                size: sp.size || "M",
-                inStock: sp.inStock !== false
-              });
-            } catch (seedErr) {
-              console.warn("Pre-seeding products into Firestore failed", seedErr);
-            }
-          }
-        }
+        const res = await fetch("/api/products");
+        if (!res.ok) throw new Error(`API returned ${res.status}`);
+        const list: Product[] = await res.json();
+        setProducts(list.length > 0 ? list : STATIC_FALLBACK_PRODUCTS);
       } catch (err) {
-        console.warn("Firestore product collection offline or empty, falling back to local preseeded sandbox.", err);
+        console.warn("Products API unreachable, falling back to local preseeded sandbox.", err);
         setProducts(STATIC_FALLBACK_PRODUCTS);
       } finally {
         setAppReady(true);
@@ -275,34 +122,16 @@ export default function App() {
   // Add item
   const handleAddProduct = async (newProd: Omit<Product, "id"> & { id?: string }) => {
     try {
-      const docId = newProd.id || `prod-${Date.now()}`;
-      const docRef = doc(db, "products", docId);
-      const isCustomArrayOccasions = (newProd as any).occasions && Array.isArray((newProd as any).occasions);
-      const isCustomArrayShapes = (newProd as any).shapes && Array.isArray((newProd as any).shapes);
-
-      const dataToSave = {
-        name: newProd.name,
-        category: newProd.category,
-        imageUrl: newProd.image,
-        price: Number(newProd.price) || 0,
-        occasions: isCustomArrayOccasions ? (newProd as any).occasions : [newProd.occasion],
-        shapes: isCustomArrayShapes ? (newProd as any).shapes : ["Hourglass", "Pear", "Apple", "Rectangle", "Inverted Triangle"],
-        colour: newProd.colour || "Bespoke",
-        size: newProd.size || "M",
-        inStock: newProd.inStock !== false
-      };
-
-      await setDoc(docRef, dataToSave);
-      const saved: Product = {
-        id: docId,
-        ...newProd,
-        inStock: dataToSave.inStock,
-        occasions: dataToSave.occasions,
-        shapes: dataToSave.shapes
-      };
+      const res = await fetch("/api/products", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newProd),
+      });
+      if (!res.ok) throw new Error(`API returned ${res.status}`);
+      const saved: Product = await res.json();
       setProducts((prev) => [...prev, saved]);
     } catch (err) {
-      console.warn("Firestore save failed - saving to client memory directly", err);
+      console.warn("Add product API call failed - saving to client memory only (won't persist)", err);
       const localSaved: Product = {
         id: newProd.id || `prod-${Date.now()}`,
         ...newProd,
@@ -315,23 +144,16 @@ export default function App() {
   // Update Item
   const handleUpdateProduct = async (p: Product) => {
     try {
-      const docRef = doc(db, "products", p.id);
-      const dataToSave = {
-        name: p.name,
-        category: p.category,
-        imageUrl: p.image,
-        price: Number(p.price) || 0,
-        occasions: p.occasions || [p.occasion],
-        shapes: p.shapes || ["Hourglass", "Pear", "Apple", "Rectangle", "Inverted Triangle"],
-        colour: p.colour || "Bespoke",
-        size: p.size || "M",
-        inStock: p.inStock !== false
-      };
-
-      await setDoc(docRef, dataToSave, { merge: true });
-      setProducts((prev) => prev.map((item) => (item.id === p.id ? p : item)));
+      const res = await fetch(`/api/products/${p.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(p),
+      });
+      if (!res.ok) throw new Error(`API returned ${res.status}`);
+      const updated: Product = await res.json();
+      setProducts((prev) => prev.map((item) => (item.id === p.id ? updated : item)));
     } catch (err) {
-      console.warn("Firestore update failed - updating client memory directly", err);
+      console.warn("Update product API call failed - updating client memory only (won't persist)", err);
       setProducts((prev) => prev.map((item) => (item.id === p.id ? p : item)));
     }
   };
@@ -339,11 +161,11 @@ export default function App() {
   // Delete item
   const handleDeleteProduct = async (id: string) => {
     try {
-      const docRef = doc(db, "products", id);
-      await deleteDoc(docRef);
+      const res = await fetch(`/api/products/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`API returned ${res.status}`);
       setProducts((prev) => prev.filter((p) => p.id !== id));
     } catch (err) {
-      console.warn("Firestore delete failed - deleting from client memory directly", err);
+      console.warn("Delete product API call failed - removing from client memory only (won't persist)", err);
       setProducts((prev) => prev.filter((p) => p.id !== id));
     }
   };

@@ -6,8 +6,6 @@ coverage/
 *.log
 
 # Environment variables
-.env
-.env.*
 !.env.example
 
 # Secrets & credentials
@@ -23,4 +21,4 @@ infra/.terraform.lock.hcl
 catalog_export.json
 failed_products.json
 
-.env.local
+config.bat
