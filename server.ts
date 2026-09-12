@@ -4,77 +4,86 @@ import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { Client, handle_file } from "@gradio/client";
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import {
+  DynamoDBDocumentClient,
+  ScanCommand,
+  PutCommand,
+  UpdateCommand,
+  DeleteCommand,
+} from "@aws-sdk/lib-dynamodb";
 
 // Initialize Express
 const app = express();
 app.use(express.json({ limit: "50mb" }));
 
-// Fallback catalog database in local file storage
-const DATA_DIR = path.join(process.cwd(), "data");
-const PRODUCTS_FILE = path.join(DATA_DIR, "products.json");
+// DynamoDB-backed product catalogue.
+// GET requests are served from an in-memory cache (dbProducts) loaded once at
+// startup -- NOT from a live DynamoDB Scan on every request. Our Products table
+// is provisioned at only 10 RCU/5 WCU (see infra/dynamodb.tf) to stay inside the
+// Always Free tier, and scanning ~11.5k items on every page load would blow
+// through that budget immediately and get throttled. Writes (POST/PUT/DELETE)
+// go to DynamoDB AND update the in-memory cache together, so it never drifts.
 
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+const ddbClient = new DynamoDBClient({ region: process.env.AWS_REGION || "us-east-1" });
+const ddb = DynamoDBDocumentClient.from(ddbClient);
+const PRODUCTS_TABLE = process.env.DYNAMODB_PRODUCTS_TABLE || "fitstyle-ai-Products";
+
+// Kaggle's "usage" field doesn't have "Wedding" or "Interview" values, so those
+// two occasions currently have zero real inventory after this mapping. Known
+// limitation, not solved here -- see conversation notes / tag some Formal items
+// as Wedding-appropriate later if needed.
+function mapUsageToOccasion(usage: string): string {
+  const normalized = (usage || "").trim().toLowerCase();
+  if (normalized === "formal") return "Formal";
+  if (normalized === "party") return "Party";
+  if (normalized === "casual") return "Casual";
+  if (normalized === "smart casual") return "Casual";
+  return "Casual"; // safe default for anything unmapped (Ethnic, Sports, Travel, Home, etc.)
 }
 
-// Pre-seeded high fidelity boutique items in case Firestore is offline
-const INITIAL_PRODUCTS = [
-  {
-    id: "prod-cas-blouse",
-    name: "Cream Silk Bow-Neck Blouse",
-    category: "top",
-    colour: "Cream",
-    occasion: "Casual",
-    size: "S, M, L, XL",
-    price: 110,
-    image: "/src/assets/images/cream_bow_blouse.png"
-  },
-  {
-    id: "prod-cas-trousers",
-    name: "Olive Green Wide-Leg Trousers",
-    category: "bottom",
-    colour: "Olive Green",
-    occasion: "Casual",
-    size: "S, M, L",
-    price: 95,
-    image: "/src/assets/images/olive_wide_pants.png"
-  },
-  {
-    id: "prod-cas-polka-dress",
-    name: "Polka Dot Bustier Dress",
-    category: "top",
-    colour: "Black & White",
-    occasion: "Casual",
-    size: "XS, S, M, L",
-    price: 125,
-    image: "/src/assets/images/polka_dot_dress.png"
-  }
-];
-
-function loadProducts() {
-  if (!fs.existsSync(PRODUCTS_FILE)) {
-    fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(INITIAL_PRODUCTS, null, 2));
-    return INITIAL_PRODUCTS;
-  }
-  try {
-    const raw = fs.readFileSync(PRODUCTS_FILE, "utf-8");
-    return JSON.parse(raw);
-  } catch (err) {
-    console.log("[INFO] Error loading products.json, defaulting to standard initial catalog.");
-    return INITIAL_PRODUCTS;
-  }
+function toFrontendProduct(item: any) {
+  const occasion = item.occasion || mapUsageToOccasion(item.usage);
+  return {
+    id: item.id,
+    name: item.name,
+    category: item.category || "top",
+    colour: item.colour,
+    occasion,
+    occasions: item.occasions || [occasion],
+    size: Array.isArray(item.available_sizes) ? item.available_sizes.join(", ") : (item.size || ""),
+    price: item.price,
+    image: item.image || "",
+    inStock: item.inStock !== false,
+  };
 }
 
-function saveProducts(prods: any[]) {
-  try {
-    fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(prods, null, 2));
-  } catch (err) {
-    console.log("[INFO] Error saving products.json to local filesystem.");
-  }
+let dbProducts: any[] = [];
+
+async function loadProductsFromDynamoDB() {
+  const items: any[] = [];
+  let lastEvaluatedKey: Record<string, any> | undefined = undefined;
+
+  do {
+    const result: any = await ddb.send(
+      new ScanCommand({
+        TableName: PRODUCTS_TABLE,
+        ExclusiveStartKey: lastEvaluatedKey,
+      })
+    );
+    items.push(...(result.Items || []));
+    lastEvaluatedKey = result.LastEvaluatedKey;
+  } while (lastEvaluatedKey);
+
+  dbProducts = items.map(toFrontendProduct);
+  console.log(`[DynamoDB] Loaded ${dbProducts.length} products into memory from ${PRODUCTS_TABLE}`);
 }
 
-// Initialize Product Catalogue
-let dbProducts = loadProducts();
+// Initialize Product Catalogue from DynamoDB at startup
+loadProductsFromDynamoDB().catch((err) => {
+  console.error("[DynamoDB] Failed to load products at startup:", err);
+  dbProducts = [];
+});
 
 // Server-side Qwen (OpenRouter) Client configuration
 const openrouterKey = process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY_1 ;
@@ -319,42 +328,56 @@ app.get("/api/health", async (req: Request, res: Response) => {
   }
 });
 
-// Products API
+// Products API (DynamoDB-backed)
 app.get("/api/products", (req: Request, res: Response) => {
   res.json(dbProducts);
 });
 
-app.post("/api/products", (req: Request, res: Response) => {
+app.post("/api/products", async (req: Request, res: Response) => {
   const newItem = {
     id: `prod-${Date.now()}`,
-    ...req.body
+    ...req.body,
   };
-  dbProducts.push(newItem);
-  saveProducts(dbProducts);
-  res.status(201).json(newItem);
-});
-
-app.put("/api/products/:id", (req: Request, res: Response) => {
-  const { id } = req.params;
-  const idx = dbProducts.findIndex(p => p.id === id);
-  if (idx > -1) {
-    dbProducts[idx] = { ...dbProducts[idx], ...req.body };
-    saveProducts(dbProducts);
-    res.json(dbProducts[idx]);
-  } else {
-    res.status(404).json({ error: "Product not found" });
+  try {
+    await ddb.send(new PutCommand({ TableName: PRODUCTS_TABLE, Item: newItem }));
+    dbProducts.push(toFrontendProduct(newItem));
+    res.status(201).json(toFrontendProduct(newItem));
+  } catch (err) {
+    console.error("[DynamoDB] Failed to add product:", err);
+    res.status(500).json({ error: "Failed to save product to database" });
   }
 });
 
-app.delete("/api/products/:id", (req: Request, res: Response) => {
+app.put("/api/products/:id", async (req: Request, res: Response) => {
   const { id } = req.params;
-  const idx = dbProducts.findIndex(p => p.id === id);
-  if (idx > -1) {
+  const idx = dbProducts.findIndex((p) => p.id === id);
+  if (idx === -1) {
+    return res.status(404).json({ error: "Product not found" });
+  }
+  const updated = { ...dbProducts[idx], ...req.body, id };
+  try {
+    await ddb.send(new PutCommand({ TableName: PRODUCTS_TABLE, Item: updated }));
+    dbProducts[idx] = toFrontendProduct(updated);
+    res.json(dbProducts[idx]);
+  } catch (err) {
+    console.error("[DynamoDB] Failed to update product:", err);
+    res.status(500).json({ error: "Failed to update product in database" });
+  }
+});
+
+app.delete("/api/products/:id", async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const idx = dbProducts.findIndex((p) => p.id === id);
+  if (idx === -1) {
+    return res.status(404).json({ error: "Product not found" });
+  }
+  try {
+    await ddb.send(new DeleteCommand({ TableName: PRODUCTS_TABLE, Key: { id } }));
     dbProducts.splice(idx, 1);
-    saveProducts(dbProducts);
     res.json({ success: true });
-  } else {
-    res.status(404).json({ error: "Product not found" });
+  } catch (err) {
+    console.error("[DynamoDB] Failed to delete product:", err);
+    res.status(500).json({ error: "Failed to delete product from database" });
   }
 });
 
