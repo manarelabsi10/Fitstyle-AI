@@ -5,8 +5,9 @@ connected and what isn't yet.
 
 ## ✅ Done
 
-- **Infrastructure**: `infra/` (Terraform) — 4 DynamoDB tables, Cognito User Pool,
-  IAM user, $1 budget alert. All Always-Free-tier-safe (see `infra/README.md`).
+- **Infrastructure**: `infra/` (Terraform) — 4 DynamoDB tables, Cognito User Pool
+  + Hosted UI domain + Google federated identity provider, IAM user, $1 budget
+  alert. All Always-Free-tier-safe (see `infra/README.md`).
 - **Product catalog**: 11,513 real products migrated from the Kaggle/HuggingFace
   fashion dataset into `fitstyle-ai-Products` (one-time migration, scripts in
   `export_catalog_for_migration.py` / `migrate_catalog_to_dynamodb.py` — not
@@ -15,15 +16,21 @@ connected and what isn't yet.
   from DynamoDB (cached in memory at startup, writes go straight to DynamoDB).
   Used by: Admin Dashboard, Landing Page, Trending, My Looks, Wardrobe, Shopper
   Studio.
+- **Auth**: Firebase Auth fully replaced with Amazon Cognito (`aws-amplify`).
+  Email/password (with required email verification code, unlike Firebase) +
+  Google Sign-In via Cognito Hosted UI both work. **Apple Sign-In was dropped**
+  (needs a paid $99/yr Apple Developer account, out of scope for this project).
+  User profiles now live in DynamoDB `Users` table (`server.ts` `/api/users`),
+  not Firestore.
 - **Body-shape taxonomy**: unified across the sizing model, recommendation
   engine, and frontend to one 5-value standard (`pear` / `hourglass` / `apple` /
   `rectangle` / `inverted_triangle`). See `FitVerse_Detect_Size_Module_FIXED.ipynb`
   and `src/utils/bodyShapeMap.ts`.
+- **Removed**: the "DEMO SHOPPER ACCESS" bypass button (dev-only shortcut that
+  skipped auth entirely) and its dead-code handler in `App.tsx`.
 
 ## ⏳ Not done yet
 
-- **Auth**: still Firebase Auth + Firestore user profiles. Cognito (`Users`
-  table + User Pool) exists in AWS but nothing calls it yet.
 - **Body analysis**: `server.ts` `/api/analyze-body` still calls Qwen Vision via
   OpenRouter. `FitVerse_Detect_Size_Module_FIXED.ipynb` (MediaPipe-based) is not
   wired into the server as an endpoint yet.
@@ -33,6 +40,20 @@ connected and what isn't yet.
 - **Product images**: currently blank for all migrated products (no S3 bucket
   yet — pending a decision on whether S3 is free-tier-safe on this account).
 - **Orders / Measurements tables**: created in DynamoDB, unused so far.
+
+## Running locally — auth setup
+
+Dev server runs on **port 3001** (not Vite's default 5173 — `server.ts` embeds
+Vite as middleware), so Cognito's callback/logout URLs and `amplifyConfig.ts`
+are both set to `http://localhost:3001`. If you change how the app is served,
+update `infra/variables.tf` (`cognito_callback_urls`/`cognito_logout_urls`),
+`src/amplifyConfig.ts`, re-run `terraform apply`, and update the Google Cloud
+Console OAuth client's authorized redirect URI to match Cognito's domain
+(not localhost — Google always redirects to the Cognito Hosted UI domain,
+which then redirects to your app).
+
+Google OAuth credentials live in `infra/terraform.tfvars` (gitignored, never
+committed) — see `infra/terraform.tfvars.example` for the format.
 
 ## Known data-quality caveats (placeholder data, not solved yet)
 
