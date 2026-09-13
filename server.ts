@@ -11,6 +11,7 @@ import {
   PutCommand,
   UpdateCommand,
   DeleteCommand,
+  GetCommand,
 } from "@aws-sdk/lib-dynamodb";
 
 // Initialize Express
@@ -378,6 +379,40 @@ app.delete("/api/products/:id", async (req: Request, res: Response) => {
   } catch (err) {
     console.error("[DynamoDB] Failed to delete product:", err);
     res.status(500).json({ error: "Failed to delete product from database" });
+  }
+});
+
+const USERS_TABLE = process.env.DYNAMODB_USERS_TABLE || "fitstyle-ai-Users";
+
+// Users API (DynamoDB-backed) -- profile is keyed by Cognito's userId (uid)
+app.get("/api/users/:id", async (req: Request, res: Response) => {
+  const { id } = req.params;
+  try {
+    const result: any = await ddb.send(
+      new GetCommand({
+        TableName: USERS_TABLE,
+        Key: { userId: id },
+      })
+    );
+    if (!result.Item) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    res.json(result.Item);
+  } catch (err) {
+    console.error("[DynamoDB] Failed to fetch user:", err);
+    res.status(500).json({ error: "Failed to fetch user profile" });
+  }
+});
+
+app.put("/api/users/:id", async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const profile = { ...req.body, uid: id, userId: id };
+  try {
+    await ddb.send(new PutCommand({ TableName: USERS_TABLE, Item: profile }));
+    res.json(profile);
+  } catch (err) {
+    console.error("[DynamoDB] Failed to save user:", err);
+    res.status(500).json({ error: "Failed to save user profile" });
   }
 });
 
