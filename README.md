@@ -21,7 +21,23 @@ connected and what isn't yet.
   Google Sign-In via Cognito Hosted UI both work. **Apple Sign-In was dropped**
   (needs a paid $99/yr Apple Developer account, out of scope for this project).
   User profiles now live in DynamoDB `Users` table (`server.ts` `/api/users`),
-  not Firestore.
+  not Firestore. `emailVerified` is now tracked on the profile (true for Google
+  sign-ins and for email/password sign-ins that completed the confirmation-code
+  step).
+- **Admin access control**: `role: "owner"` is decided **server-side only** now
+  (`server.ts` `ADMIN_EMAILS` allowlist env var), never trusted from the client
+  toggle. Admin accounts are created directly via `aws cognito-idp
+  admin-create-user` / `admin-set-user-password` (see `infra/README.md` or ask
+  Hind) -- there's no public "become an owner" signup path anymore.
+- **Account deletion**: shoppers can permanently delete their own account
+  (Cognito user + DynamoDB profile) from the account menu on both the Landing
+  Page and the Shopper Studio dropdown, next to Sign Out. Confirmation prompt
+  required, cannot be undone.
+- **Admin "add product" hang fixed**: the product image upload was still
+  calling Firebase Storage (never migrated), and a hung/unreachable upload was
+  blocking the whole "add product" flow indefinitely. It now times out after
+  8s and the product saves without a photo rather than hanging forever. Image
+  hosting itself is still not on AWS -- see the S3 item below.
 - **Body-shape taxonomy**: unified across the sizing model, recommendation
   engine, and frontend to one 5-value standard (`pear` / `hourglass` / `apple` /
   `rectangle` / `inverted_triangle`). See `FitVerse_Detect_Size_Module_FIXED.ipynb`
