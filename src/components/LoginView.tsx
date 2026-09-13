@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Eye, EyeOff, Sparkles, User, ShieldCheck } from "lucide-react";
 import { UserProfile } from "../types";
-import { signIn, signUp, confirmSignUp, signInWithRedirect, getCurrentUser } from "aws-amplify/auth";
+import { signIn, signUp, confirmSignUp, signInWithRedirect, getCurrentUser, fetchUserAttributes } from "aws-amplify/auth";
 import fitStyleLogo from "../assets/images/fitstyle_ai_logo_1780811765736.png";
 
 async function fetchUserProfile(uid: string): Promise<UserProfile | null> {
@@ -86,7 +86,14 @@ export default function LoginView({ onLogin, initialMessage, initialView }: Logi
       const { userId } = await getCurrentUser();
       let userProfile = await fetchUserProfile(userId);
       if (!userProfile) {
-        userProfile = { uid: userId, email, fullName: email.split("@")[0], role };
+        let verified = false;
+        try {
+          const attrs = await fetchUserAttributes();
+          verified = attrs.email_verified === "true";
+        } catch {
+          // couldn't read attributes -- leave verified false, not fatal
+        }
+        userProfile = { uid: userId, email, fullName: email.split("@")[0], role, emailVerified: verified };
         await saveUserProfile(userProfile);
       }
         setSuccessMsg("Success! Accessing your styling studio...");
@@ -144,7 +151,8 @@ export default function LoginView({ onLogin, initialMessage, initialView }: Logi
         return;
       }
       const { userId } = await getCurrentUser();
-      const newUserProfile: UserProfile = { uid: userId, email, fullName, role };
+      // Confirming the emailed code IS Cognito's email verification -- always true here.
+      const newUserProfile: UserProfile = { uid: userId, email, fullName, role, emailVerified: true };
       await saveUserProfile(newUserProfile);
       setSuccessMsg("Account verified! Logging you into the styling studio...");
       setTimeout(() => {

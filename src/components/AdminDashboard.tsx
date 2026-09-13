@@ -136,71 +136,77 @@ export default function AdminDashboard({
     const canvas = document.createElement('canvas');
     const img = new Image();
 
+    const uploadPromise = new Promise<string>((resolve, reject) => {
+      img.onerror = () => reject(new Error('Invalid image file'));
+      img.onload = async () => {
+        try {
+          const maxWidth = 640;
+          const maxHeight = 640;
+          let width = img.width;
+          let height = img.height;
+          if (width > height) {
+            if (width > maxWidth) {
+              height *= maxWidth / width;
+              width = maxWidth;
+            }
+          } else {
+            if (height > maxHeight) {
+              width *= maxHeight / height;
+              height = maxHeight;
+            }
+          }
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            throw new Error('Canvas context failed');
+          }
+          ctx.drawImage(img, 0, 0, width, height);
+          const fileMb = file.size / 1024 / 1024;
+          const quality = fileMb > 4 ? 0.5 : fileMb > 2 ? 0.6 : 0.7;
+          canvas.toBlob((blob) => {
+            if (!blob) {
+              reject(new Error('Image compression failed'));
+              return;
+            }
+            const storageRef = ref(storage, `products/${currentProductId}/${file.name}`);
+            const uploadTask = uploadBytesResumable(storageRef, blob);
+            uploadTask.on(
+              'state_changed',
+              (snapshot) => {
+                const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
+                setUploadProgress(progress);
+                if (progress === 100) {
+                  setUploadStatus('Upload complete. Finalizing...');
+                }
+              },
+              (err) => {
+                reject(err);
+              },
+              async () => {
+                try {
+                  const url = await getDownloadURL(uploadTask.snapshot.ref);
+                  resolve(url);
+                } catch (err) {
+                  reject(err);
+                }
+              }
+            );
+          }, 'image/webp', quality);
+        } catch (innerErr) {
+          reject(innerErr);
+        }
+      };
+      img.src = previewUrl;
+    });
+
+    const timeoutPromise = new Promise<string>((_, reject) => {
+      setTimeout(() => reject(new Error("Image upload timed out after 8s (Firebase Storage unreachable -- image hosting isn't wired to AWS yet)")), 8000);
+    });
+
     let compressedUrl: string;
     try {
-      compressedUrl = await new Promise<string>((resolve, reject) => {
-        img.onerror = () => reject(new Error('Invalid image file'));
-        img.onload = async () => {
-          try {
-            const maxWidth = 640;
-            const maxHeight = 640;
-            let width = img.width;
-            let height = img.height;
-            if (width > height) {
-              if (width > maxWidth) {
-                height *= maxWidth / width;
-                width = maxWidth;
-              }
-            } else {
-              if (height > maxHeight) {
-                width *= maxHeight / height;
-                height = maxHeight;
-              }
-            }
-            canvas.width = width;
-            canvas.height = height;
-            const ctx = canvas.getContext('2d');
-            if (!ctx) {
-              throw new Error('Canvas context failed');
-            }
-            ctx.drawImage(img, 0, 0, width, height);
-            const fileMb = file.size / 1024 / 1024;
-            const quality = fileMb > 4 ? 0.5 : fileMb > 2 ? 0.6 : 0.7;
-            canvas.toBlob((blob) => {
-              if (!blob) {
-                reject(new Error('Image compression failed'));
-                return;
-              }
-              const storageRef = ref(storage, `products/${currentProductId}/${file.name}`);
-              const uploadTask = uploadBytesResumable(storageRef, blob);
-              uploadTask.on(
-                'state_changed',
-                (snapshot) => {
-                  const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
-                  setUploadProgress(progress);
-                  if (progress === 100) {
-                    setUploadStatus('Upload complete. Finalizing...');
-                  }
-                },
-                (err) => {
-                  reject(err);
-                },
-                async () => {
-                  try {
-                    const url = await getDownloadURL(uploadTask.snapshot.ref);
-                    resolve(url);
-                  } catch (err) {
-                    reject(err);
-                  }
-                }
-              );
-            }, 'image/webp', quality);
-          } catch (innerErr) {
-            reject(innerErr);
-          }
-        };
-        img.src = previewUrl;
-      });
+      compressedUrl = await Promise.race([uploadPromise, timeoutPromise]);
     } finally {
       setUploading(false);
       setUploadProgress(0);
@@ -216,9 +222,16 @@ export default function AdminDashboard({
     try {
       let imageUrl = image;
       if (selectedFile) {
-        imageUrl = await uploadImageFile(selectedFile);
-        setImage(imageUrl);
-        setSelectedFile(null);
+        try {
+          imageUrl = await uploadImageFile(selectedFile);
+          setImage(imageUrl);
+          setSelectedFile(null);
+        } catch (uploadErr) {
+          console.warn("Image upload failed, saving product without a photo for now:", uploadErr);
+          showToast("⚠ Photo upload failed -- product saved without an image. Image hosting isn't set up on AWS yet.");
+          imageUrl = image; // keep whatever was there before (likely empty for a new product)
+          setSelectedFile(null);
+        }
       }
 
       if (editingItem) {

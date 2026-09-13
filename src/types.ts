@@ -21,6 +21,7 @@ export interface UserProfile {
   email: string;
   fullName: string;
   role: "shopper" | "owner";
+  emailVerified?: boolean;
   preferredPayment?: "google" | "apple" | null;
   wishlist?: string[];
 }

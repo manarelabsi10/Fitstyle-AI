@@ -124,6 +124,7 @@ interface ShopperStudioViewProps {
   products: Product[];
   currentUser: UserProfile;
   onLogout: () => void;
+  onDeleteAccount?: () => void;
   onLogin?: (user: UserProfile) => void;
   onBackToPortal?: () => void;
   initialOutfit?: any;
@@ -683,7 +684,7 @@ function CatalogModal({
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function ShopperStudioView({ products, currentUser, onLogout, onLogin, onBackToPortal, initialOutfit, onAddProduct, onDeleteProduct }: ShopperStudioViewProps) {
+export default function ShopperStudioView({ products, currentUser, onLogout, onDeleteAccount, onLogin, onBackToPortal, initialOutfit, onAddProduct, onDeleteProduct }: ShopperStudioViewProps) {
   // Main express checkout states
   const [connectedPayment, setConnectedPayment] = useState<"google" | "apple" | null>(null);
   const [googleAccountInfo, setGoogleAccountInfo] = useState<{ name: string; email: string } | null>(null);
@@ -4535,6 +4536,25 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onL
                   <LogOut className="w-4 h-4 text-red-500" />
                   <span>Sign Out</span>
                 </button>
+
+                {onDeleteAccount && (
+                  <button
+                    onClick={() => {
+                      setShowHomeMenu(false);
+                      const confirmed = window.confirm(
+                        "Permanently delete your account? This cannot be undone -- your profile, saved looks, and login will all be removed."
+                      );
+                      if (confirmed) {
+                        onDeleteAccount();
+                      }
+                    }}
+                    className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-xs font-bold text-red-800 flex items-center gap-2.5 transition-colors cursor-pointer"
+                    id="menu-item-delete-account"
+                  >
+                    <LogOut className="w-4 h-4 text-red-800" />
+                    <span>Delete Account</span>
+                  </button>
+                )}
               </div>
             )}
           </div>
