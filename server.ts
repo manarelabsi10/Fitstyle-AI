@@ -384,6 +384,21 @@ app.delete("/api/products/:id", async (req: Request, res: Response) => {
 
 const USERS_TABLE = process.env.DYNAMODB_USERS_TABLE || "fitstyle-ai-Users";
 
+// Comma-separated allowlist, e.g. "hind@example.com,teammate2@example.com"
+// Only emails on this list can ever end up with role "owner" -- enforced
+// here server-side, never trusted from the client.
+const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || "")
+  .split(",")
+  .map((e) => e.trim().toLowerCase())
+  .filter(Boolean);
+
+function resolveRole(email: string, requestedRole: string | undefined): "shopper" | "owner" {
+  if (requestedRole === "owner" && ADMIN_EMAILS.includes((email || "").toLowerCase())) {
+    return "owner";
+  }
+  return "shopper";
+}
+
 // Users API (DynamoDB-backed) -- profile is keyed by Cognito's userId (uid)
 app.get("/api/users/:id", async (req: Request, res: Response) => {
   const { id } = req.params;
@@ -406,13 +421,29 @@ app.get("/api/users/:id", async (req: Request, res: Response) => {
 
 app.put("/api/users/:id", async (req: Request, res: Response) => {
   const { id } = req.params;
-  const profile = { ...req.body, uid: id, userId: id };
+  const profile = {
+    ...req.body,
+    uid: id,
+    userId: id,
+    role: resolveRole(req.body.email, req.body.role), // server has final say, not the client
+  };
   try {
     await ddb.send(new PutCommand({ TableName: USERS_TABLE, Item: profile }));
     res.json(profile);
   } catch (err) {
     console.error("[DynamoDB] Failed to save user:", err);
     res.status(500).json({ error: "Failed to save user profile" });
+  }
+});
+
+app.delete("/api/users/:id", async (req: Request, res: Response) => {
+  const { id } = req.params;
+  try {
+    await ddb.send(new DeleteCommand({ TableName: USERS_TABLE, Key: { userId: id } }));
+    res.json({ success: true });
+  } catch (err) {
+    console.error("[DynamoDB] Failed to delete user profile:", err);
+    res.status(500).json({ error: "Failed to delete user profile" });
   }
 });
 
