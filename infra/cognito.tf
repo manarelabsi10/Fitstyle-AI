@@ -38,9 +38,13 @@ resource "aws_cognito_user_pool_client" "web" {
     "ALLOW_USER_SRP_AUTH",
   ]
 
-  supported_identity_providers = ["COGNITO"]
+  supported_identity_providers = local.identity_providers
   callback_urls                = var.cognito_callback_urls
+  logout_urls                  = var.cognito_logout_urls
   allowed_oauth_flows          = ["code"]
   allowed_oauth_scopes         = ["email", "openid", "profile"]
   allowed_oauth_flows_user_pool_client = true
+
+  # Ensures Google (when present) exists before the client tries to reference it
+  depends_on = [aws_cognito_identity_provider.google]
 }

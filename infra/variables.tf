@@ -18,5 +18,30 @@ variable "budget_alert_email" {
 variable "cognito_callback_urls" {
   description = "URLs Cognito is allowed to redirect to after login (add your local dev URL and later your deployed URL)."
   type        = list(string)
-  default     = ["http://localhost:5173"]
+  default     = ["http://localhost:3001"]
+}
+
+variable "cognito_logout_urls" {
+  description = "URLs Cognito is allowed to redirect to after logout."
+  type        = list(string)
+  default     = ["http://localhost:3001"]
+}
+
+variable "cognito_domain_prefix" {
+  description = "Globally-unique Cognito Hosted UI domain prefix. Must be unique across ALL AWS accounts worldwide -- change this if apply fails with 'already exists'."
+  type        = string
+  default     = "fitstyle-ai-hind-2026"
+}
+
+variable "google_client_id" {
+  description = "Google OAuth Client ID (from Google Cloud Console). Leave empty until Phase 2 -- Google sign-in is skipped entirely until this is set."
+  type        = string
+  default     = ""
+}
+
+variable "google_client_secret" {
+  description = "Google OAuth Client Secret (from Google Cloud Console). Leave empty until Phase 2."
+  type        = string
+  default     = ""
+  sensitive   = true
 }

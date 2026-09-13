@@ -1,10 +1,29 @@
 import React, { useState, useEffect } from "react";
 import { Eye, EyeOff, Sparkles, User, ShieldCheck } from "lucide-react";
 import { UserProfile } from "../types";
-import { auth, db } from "../firebase";
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signInWithPopup, GoogleAuthProvider, OAuthProvider } from "firebase/auth";
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import { signIn, signUp, confirmSignUp, signInWithRedirect, getCurrentUser } from "aws-amplify/auth";
 import fitStyleLogo from "../assets/images/fitstyle_ai_logo_1780811765736.png";
+
+async function fetchUserProfile(uid: string): Promise<UserProfile | null> {
+  try {
+    const res = await fetch(`/api/users/${uid}`);
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`API returned ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.warn("Failed to fetch user profile", err);
+    return null;
+  }
+}
+
+async function saveUserProfile(profile: UserProfile): Promise<void> {
+  const res = await fetch(`/api/users/${profile.uid}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(profile),
+  });
+  if (!res.ok) throw new Error(`API returned ${res.status}`);
+}
 
 interface LoginViewProps {
   onLogin: (user: UserProfile) => void;
@@ -21,12 +40,6 @@ const RealGoogleIcon = () => (
   </svg>
 );
 
-const RealAppleIcon = () => (
-  <svg className="w-5 h-5 shrink-0 mr-1.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-    <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.02-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z" />
-  </svg>
-);
-
 export default function LoginView({ onLogin, initialMessage, initialView }: LoginViewProps) {
   const [view, setView] = useState<"login" | "signup">("login");
   const [role, setRole] = useState<"shopper" | "owner">("shopper");
@@ -37,7 +50,8 @@ export default function LoginView({ onLogin, initialMessage, initialView }: Logi
   const [errorMsg, setErrorMsg] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
   const [infoBanner, setInfoBanner] = useState("");
-  const isLocalhost = typeof window !== "undefined" && window.location.hostname.includes("localhost");
+  const [pendingConfirmation, setPendingConfirmation] = useState(false);
+  const [confirmationCode, setConfirmationCode] = useState("");
 
   useEffect(() => {
     if (initialView) {
@@ -53,7 +67,7 @@ export default function LoginView({ onLogin, initialMessage, initialView }: Logi
     }
   }, [initialMessage]);
 
-  const handleSignIn = (e: React.FormEvent) => {
+  const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg("");
     setSuccessMsg("");
@@ -63,39 +77,28 @@ export default function LoginView({ onLogin, initialMessage, initialView }: Logi
       return;
     }
 
-    signInWithEmailAndPassword(auth, email, password)
-      .then(async (userCredential) => {
-        const user = userCredential.user;
-        const userDocRef = doc(db, "users", user.uid);
-        const userDocSnap = await getDoc(userDocRef);
-
-        let userProfile: UserProfile;
-        if (userDocSnap.exists()) {
-          userProfile = userDocSnap.data() as UserProfile;
-          if (!userProfile.role) {
-            userProfile.role = role;
-          }
-        } else {
-          userProfile = {
-            uid: user.uid,
-            email: user.email || email,
-            fullName: user.displayName || email.split("@")[0],
-            role: role
-          };
-          await setDoc(userDocRef, userProfile);
-        }
-
+    try {
+      const { isSignedIn } = await signIn({ username: email, password });
+      if (!isSignedIn) {
+        setErrorMsg("Additional verification step required. Please try again or contact support.");
+        return;
+      }
+      const { userId } = await getCurrentUser();
+      let userProfile = await fetchUserProfile(userId);
+      if (!userProfile) {
+        userProfile = { uid: userId, email, fullName: email.split("@")[0], role };
+        await saveUserProfile(userProfile);
+      }
         setSuccessMsg("Success! Accessing your styling studio...");
         setTimeout(() => {
-          onLogin(userProfile);
+          onLogin(userProfile!);
         }, 1000);
-      })
-      .catch((err: any) => {
-        setErrorMsg("Authentication failed: " + (err.message || "Please check your email and password."));
-      });
+    } catch (err: any) {
+      setErrorMsg("Authentication failed: " + (err.message || "Please check your email and password."));
+    }
   };
 
-  const handleCreateAccount = (e: React.FormEvent) => {
+  const handleCreateAccount = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg("");
     setSuccessMsg("");
@@ -105,113 +108,57 @@ export default function LoginView({ onLogin, initialMessage, initialView }: Logi
       return;
     }
 
-    if (password.length < 6) {
-      setErrorMsg("Password must meet the 6 character minimum limit.");
+    const hasUpper = /[A-Z]/.test(password);
+    const hasLower = /[a-z]/.test(password);
+    const hasNumber = /[0-9]/.test(password);
+    if (password.length < 8 || !hasUpper || !hasLower || !hasNumber) {
+      setErrorMsg("Password must be at least 8 characters and include an uppercase letter, a lowercase letter, and a number.");
       return;
     }
 
-    createUserWithEmailAndPassword(auth, email, password)
-      .then(async (userCredential) => {
-        const user = userCredential.user;
-        const newUserProfile: UserProfile = {
-          uid: user.uid,
-          email: user.email || email,
-          fullName: fullName,
-          role: role
-        };
-
-        // Create user document on Firestore users/{userId} path
-        await setDoc(doc(db, "users", user.uid), newUserProfile);
-
-        setSuccessMsg("Account created! Logging you into the styling studio...");
-        setTimeout(() => {
-          onLogin(newUserProfile);
-        }, 1000);
-      })
-      .catch((err: any) => {
-        setErrorMsg("Registration failed: " + (err.message || "An error occurred during account creation."));
+    try {
+      await signUp({
+        username: email,
+        password,
+        options: { userAttributes: { email, name: fullName } },
       });
+      setPendingConfirmation(true);
+      setSuccessMsg("Check your email for a 6-digit verification code.");
+    } catch (err: any) {
+      setErrorMsg("Registration failed: " + (err.message || "An error occurred during account creation."));
+    }
   };
 
-  const handleSocialLogin = (providerName: "google" | "apple") => {
+  const handleConfirmSignUp = async (e: React.FormEvent) => {
+    e.preventDefault();
     setErrorMsg("");
     setSuccessMsg("");
 
-    if (providerName === "apple") {
-      const provider = new OAuthProvider("apple.com");
-      signInWithPopup(auth, provider)
-        .then(async (userCredential) => {
-          const user = userCredential.user;
-          const userDocRef = doc(db, "users", user.uid);
-          const userDocSnap = await getDoc(userDocRef);
-
-          let userProfile: UserProfile;
-          if (userDocSnap.exists()) {
-            userProfile = userDocSnap.data() as UserProfile;
-          } else {
-            userProfile = {
-              uid: user.uid,
-              email: user.email || "",
-              fullName: user.displayName || user.email?.split("@")[0] || "Apple User",
-              role: role
-            };
-            await setDoc(userDocRef, userProfile);
-          }
-
-          setSuccessMsg("Success! Accessing your styling studio...");
-          setTimeout(() => {
-            onLogin(userProfile);
-          }, 800);
-        })
-        .catch((err: any) => {
-          if (err.code === "auth/popup-blocked") {
-            setErrorMsg("Please allow popups for this site and try again");
-          } else if (err.code === "auth/popup-closed-by-user" || err.code === "auth/cancelled-popup-request") {
-            setErrorMsg("");
-          } else {
-            setErrorMsg("Apple Authentication failed: " + (err.message || "Please try again."));
-          }
-        });
-      return;
+    try {
+      await confirmSignUp({ username: email, confirmationCode });
+      const { isSignedIn } = await signIn({ username: email, password });
+      if (!isSignedIn) {
+        setErrorMsg("Verified, but sign-in needs an extra step. Please sign in manually.");
+        setPendingConfirmation(false);
+        setView("login");
+        return;
+      }
+      const { userId } = await getCurrentUser();
+      const newUserProfile: UserProfile = { uid: userId, email, fullName, role };
+      await saveUserProfile(newUserProfile);
+      setSuccessMsg("Account verified! Logging you into the styling studio...");
+      setTimeout(() => {
+        onLogin(newUserProfile);
+      }, 1000);
+    } catch (err: any) {
+      setErrorMsg("Verification failed: " + (err.message || "Invalid or expired code."));
     }
+  };
 
-    const provider = new GoogleAuthProvider();
-    provider.setCustomParameters({
-      prompt: "select_account"
-    });
-    signInWithPopup(auth, provider)
-      .then(async (userCredential) => {
-        const user = userCredential.user;
-        const userDocRef = doc(db, "users", user.uid);
-        const userDocSnap = await getDoc(userDocRef);
-
-        let userProfile: UserProfile;
-        if (userDocSnap.exists()) {
-          userProfile = userDocSnap.data() as UserProfile;
-        } else {
-          userProfile = {
-            uid: user.uid,
-            email: user.email || "",
-            fullName: user.displayName || user.email?.split("@")[0] || "Google User",
-            role: role
-          };
-          await setDoc(userDocRef, userProfile);
-        }
-
-        setSuccessMsg("Success! Accessing your styling studio...");
-        setTimeout(() => {
-          onLogin(userProfile);
-        }, 800);
-      })
-      .catch((err: any) => {
-        if (err.code === "auth/popup-blocked") {
-          setErrorMsg("Please allow popups for this site and try again");
-        } else if (err.code === "auth/popup-closed-by-user" || err.code === "auth/cancelled-popup-request") {
-          setErrorMsg("");
-        } else {
-          setErrorMsg("Google Authentication failed: " + (err.message || "Please try again."));
-        }
-      });
+  const handleGoogleLogin = () => {
+    setErrorMsg("");
+    setSuccessMsg("");
+    signInWithRedirect({ provider: "Google" });
   };
 
   return (
@@ -328,7 +275,40 @@ export default function LoginView({ onLogin, initialMessage, initialView }: Logi
             </div>
           )}
 
-          {/* Core Authed Form */}
+          {pendingConfirmation ? (
+            <form className="space-y-6" onSubmit={handleConfirmSignUp}>
+              <div>
+                <label className="block text-[10px] font-outfit uppercase tracking-[0.2em] text-[#73636f] font-bold mb-1.5">
+                  VERIFICATION CODE
+                </label>
+                <p className="text-xs text-[#52424e] mb-3">
+                  We emailed a 6-digit code to {email}. Enter it below to activate your account.
+                </p>
+                <input
+                  type="text"
+                  required
+                  inputMode="numeric"
+                  placeholder="123456"
+                  value={confirmationCode}
+                  onChange={(e) => setConfirmationCode(e.target.value)}
+                  className="w-full bg-[#fff7fa]/50 px-4 py-3 rounded-xl border border-[#eed0de] focus:bg-white focus:border-[#5a005a] focus:ring-1 focus:ring-[#5a005a]/20 transition-all outline-none font-sans text-sm text-[#221920] tracking-[0.3em] text-center"
+                />
+              </div>
+              <button
+                type="submit"
+                className="w-full py-4 px-4 bg-[#5a005a] hover:bg-[#430043] text-white rounded-xl font-outfit text-xs font-bold uppercase tracking-[0.16em] shadow-lg shadow-purple-950/10 hover:shadow-purple-900/20 active:scale-98 transition-all"
+              >
+                VERIFY & CONTINUE
+              </button>
+              <button
+                type="button"
+                onClick={() => { setPendingConfirmation(false); setView("login"); }}
+                className="w-full text-center text-xs text-[#73636f] hover:text-[#5a005a] underline"
+              >
+                Back to sign in
+              </button>
+            </form>
+          ) : (
           <form className="space-y-6" onSubmit={view === "login" ? handleSignIn : handleCreateAccount}>
             
             {/* Account Type / Role Capsule Selector */}
@@ -487,41 +467,22 @@ export default function LoginView({ onLogin, initialMessage, initialView }: Logi
                   </span>
                 </div>
 
-                {/* Custom Google & Apple Brand Buttons */}
-                <div className="grid grid-cols-2 gap-4">
+                {/* Google Sign-In */}
+                <div className="grid grid-cols-1 gap-4">
                   <button
                     type="button"
-                    onClick={() => handleSocialLogin("google")}
+                    onClick={handleGoogleLogin}
                     className="flex items-center justify-center gap-1.5 py-3.5 px-4 rounded-xl border border-[#f0dae4] hover:bg-[#fff7fa]/60 active:scale-98 transition-all text-xs text-[#221920] font-sans font-medium"
                   >
                     <RealGoogleIcon />
-                    <span className="font-bold tracking-tight">GOOGLE</span>
-                  </button>
-                  
-                  <button
-                    type="button"
-                    onClick={() => handleSocialLogin("apple")}
-                    className="flex items-center justify-center gap-1.5 py-3.5 px-4 rounded-xl border border-[#f0dae4] hover:bg-[#fff7fa]/60 active:scale-98 transition-all text-xs text-[#221920] font-sans font-medium"
-                  >
-                    <RealAppleIcon />
-                    <span className="font-bold">Apple</span>
+                    <span className="font-bold tracking-tight">CONTINUE WITH GOOGLE</span>
                   </button>
                 </div>
 
-                {isLocalhost && (
-                  <div className="mt-4 text-center">
-                    <button
-                      type="button"
-                      onClick={() => onLogin({ uid: "usr-evelyn", email: "evelyn@fitstyle.ai", fullName: "Evelyn Harper", role: "shopper" })}
-                      className="inline-flex items-center justify-center rounded-3xl bg-[#ac2471] text-white py-3 px-4 text-xs font-semibold uppercase tracking-[0.15em] shadow-lg shadow-[#ac2471]/20 hover:bg-[#8f1f5a] transition-all"
-                    >
-                      DEMO SHOPPER ACCESS
-                    </button>
-                  </div>
-                )}
               </>
             )}
           </form>
+          )}
 
           {/* Footer view toggle */}
           <div className="mt-10 text-center text-sm">
