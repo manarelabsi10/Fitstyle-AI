@@ -4,7 +4,7 @@ import ShopperStudioView from "./components/ShopperStudioView";
 import AdminDashboard from "./components/AdminDashboard";
 import LandingPage from "./components/LandingPage";
 import { Product, UserProfile } from "./types";
-import { getCurrentUser, signOut, fetchUserAttributes } from "aws-amplify/auth";
+import { getCurrentUser, signOut, fetchUserAttributes, deleteUser } from "aws-amplify/auth";
 import "./amplifyConfig";
 import { STATIC_FALLBACK_PRODUCTS } from "./data/fallbackProducts";
 
@@ -51,10 +51,13 @@ export default function App() {
           // (requires the "name" attribute_mapping in infra/cognito_google_idp.tf).
           let realEmail = "";
           let realName = "FitStyle User";
+          let verified = false;
           try {
             const attrs = await fetchUserAttributes();
             realEmail = attrs.email || "";
             realName = attrs.name || (realEmail ? realEmail.split("@")[0] : "FitStyle User");
+            // Google-authenticated emails are always verified by Google itself.
+            verified = attrs.email_verified === "true";
           } catch (attrErr) {
             console.warn("Could not fetch Cognito user attributes, using placeholder name", attrErr);
           }
@@ -63,6 +66,7 @@ export default function App() {
             email: realEmail,
             fullName: realName,
             role: "shopper",
+            emailVerified: verified,
           };
           await fetch(`/api/users/${userId}`, {
             method: "PUT",
@@ -117,6 +121,30 @@ export default function App() {
 
   const handleUserLogout = () => {
     signOut().catch((err) => console.error("Signout error", err));
+    setCurrentUser(null);
+    setShowAuth(false);
+    setCurrentView("home");
+    setInitialOutfit(null);
+    localStorage.removeItem("active_user_session_fitstyle");
+  };
+
+  // Permanently deletes the Cognito account AND the DynamoDB profile.
+  // This cannot be undone -- the caller (ShopperStudioView) confirms with the
+  // user before calling this.
+  const handleDeleteAccount = async () => {
+    const uid = currentUser?.uid;
+    try {
+      await deleteUser(); // removes the Cognito account itself
+    } catch (err) {
+      console.error("Failed to delete Cognito account", err);
+    }
+    if (uid) {
+      try {
+        await fetch(`/api/users/${uid}`, { method: "DELETE" });
+      } catch (err) {
+        console.error("Failed to delete user profile from DynamoDB", err);
+      }
+    }
     setCurrentUser(null);
     setShowAuth(false);
     setCurrentView("home");
@@ -239,6 +267,7 @@ export default function App() {
         initialOutfit={initialOutfit}
         onAddProduct={handleAddProduct}
         onDeleteProduct={handleDeleteProduct}
+        onDeleteAccount={handleDeleteAccount}
       />
     );
   }
@@ -250,6 +279,7 @@ export default function App() {
       products={products.filter((p) => p.inStock !== false)}
       currentUser={currentUser}
       onLogout={handleUserLogout}
+      onDeleteAccount={handleDeleteAccount}
       activeView={currentView === "fitting-studio" ? "home" : currentView}
       setActiveView={setCurrentView}
       onSignIn={(message, redirectTarget) => {

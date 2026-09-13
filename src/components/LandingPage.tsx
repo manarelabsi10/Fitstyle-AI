@@ -26,6 +26,7 @@ interface LandingPageProps {
   products: Product[];
   currentUser: UserProfile | null;
   onLogout: () => void;
+  onDeleteAccount?: () => void;
   activeView: "home" | "trending" | "my-looks" | "wardrobe";
   setActiveView: (view: "home" | "trending" | "my-looks" | "wardrobe") => void;
   onSignIn: (message?: string, redirectTarget?: string) => void;
@@ -37,7 +38,8 @@ interface LandingPageProps {
 export default function LandingPage({ 
   products, 
   currentUser, 
-  onLogout, 
+  onLogout,
+  onDeleteAccount,
   activeView, 
   setActiveView, 
   onSignIn, 
@@ -234,6 +236,24 @@ export default function LandingPage({
                       <LogOut className="w-3.5 h-3.5" />
                       Sign Out
                     </button>
+
+                    {onDeleteAccount && (
+                      <button
+                        onClick={() => {
+                          setShowDropdown(false);
+                          const confirmed = window.confirm(
+                            "Permanently delete your account? This cannot be undone -- your profile, saved looks, and login will all be removed."
+                          );
+                          if (confirmed) {
+                            onDeleteAccount();
+                          }
+                        }}
+                        className="w-full text-left px-4 py-2 hover:bg-red-50 text-xs font-bold text-red-800 flex items-center gap-2 cursor-pointer"
+                      >
+                        <LogOut className="w-3.5 h-3.5" />
+                        Delete Account
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
