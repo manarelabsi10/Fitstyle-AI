@@ -4,9 +4,8 @@ import ShopperStudioView from "./components/ShopperStudioView";
 import AdminDashboard from "./components/AdminDashboard";
 import LandingPage from "./components/LandingPage";
 import { Product, UserProfile } from "./types";
-import { db, auth } from "./firebase";
-import { doc, getDoc, setDoc } from "firebase/firestore";
-import { signOut, onAuthStateChanged } from "firebase/auth";
+import { getCurrentUser, signOut, fetchUserAttributes } from "aws-amplify/auth";
+import "./amplifyConfig";
 import { STATIC_FALLBACK_PRODUCTS } from "./data/fallbackProducts";
 
 export default function App() {
@@ -33,38 +32,54 @@ export default function App() {
       }
     }
 
-    // Subscribe to Firebase Auth changes to sync reliably
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      if (!user) {
-        // No active user or logged out
-        setCurrentUser(null);
-        localStorage.removeItem("active_user_session_fitstyle");
-        return;
-      }
-
+    // Check for an existing Cognito session (covers: page refresh after email/password
+    // login, AND the redirect back from Google via Cognito's Hosted UI).
+    // Unlike Firebase's onAuthStateChanged, Amplify doesn't push "logged out" as a
+    // default event -- getCurrentUser() simply throws if there's no session, which we
+    // treat as "nothing to do here, keep whatever localStorage already restored above."
+    (async () => {
       try {
-        const userDocRef = doc(db, "users", user.uid);
-        const userDocSnap = await getDoc(userDocRef);
-
-        if (userDocSnap.exists()) {
-          const profile = userDocSnap.data() as UserProfile;
+        const { userId } = await getCurrentUser();
+        const res = await fetch(`/api/users/${userId}`);
+        if (res.ok) {
+          const profile: UserProfile = await res.json();
           setCurrentUser(profile);
           localStorage.setItem("active_user_session_fitstyle", JSON.stringify(profile));
-        } else {
+        } else if (res.status === 404) {
+          // Signed into Cognito (e.g. just came back from Google) but no profile
+          // saved yet -- create one now, pulling the real name/email Google gave us
+          // (requires the "name" attribute_mapping in infra/cognito_google_idp.tf).
+          let realEmail = "";
+          let realName = "FitStyle User";
+          try {
+            const attrs = await fetchUserAttributes();
+            realEmail = attrs.email || "";
+            realName = attrs.name || (realEmail ? realEmail.split("@")[0] : "FitStyle User");
+          } catch (attrErr) {
+            console.warn("Could not fetch Cognito user attributes, using placeholder name", attrErr);
+          }
           const profile: UserProfile = {
-            uid: user.uid,
-            email: user.email || "",
-            fullName: user.displayName || user.email?.split("@")[0] || "FitStyle User",
-            role: "shopper"
+            uid: userId,
+            email: realEmail,
+            fullName: realName,
+            role: "shopper",
           };
-          await setDoc(userDocRef, profile);
+          await fetch(`/api/users/${userId}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(profile),
+          });
           setCurrentUser(profile);
           localStorage.setItem("active_user_session_fitstyle", JSON.stringify(profile));
         }
-      } catch (authProfileErr) {
-        console.warn("Unable to sync Firebase auth user profile, retaining local session if present.", authProfileErr);
+      } catch {
+        // No active Cognito session -- fine, this just means the user isn't logged
+        // in via Cognito right now. Whatever localStorage restored above (if
+        // anything) stands.
       }
-    });
+    })();
+
+    const unsubscribe = () => {}; // kept so the existing cleanup below still compiles
 
     // Load items from our DynamoDB-backed API (server.ts -> DynamoDB Products table)
     const fetchCatalog = async () => {
@@ -100,18 +115,8 @@ export default function App() {
     setShowAuth(false);
   };
 
-  const handleInstantLogin = () => {
-    const defaultUser: UserProfile = {
-      uid: "usr-evelyn",
-      email: "evelyn@fitstyle.ai",
-      fullName: "Evelyn Harper",
-      role: "shopper"
-    };
-    handleUserLogin(defaultUser);
-  };
-
   const handleUserLogout = () => {
-    signOut(auth).catch((err) => console.error("Signout error", err));
+    signOut().catch((err) => console.error("Signout error", err));
     setCurrentUser(null);
     setShowAuth(false);
     setCurrentView("home");
