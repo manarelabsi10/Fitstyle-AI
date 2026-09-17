@@ -5,9 +5,6 @@ import { jsPDF } from "jspdf";
 import ReactMarkdown from "react-markdown";
 import emailjs from '@emailjs/browser';
 import { detectJointsFromImage } from "../utils/poseDetection";
-import { db, auth, handleFirestoreError, OperationType } from "../firebase";
-import { doc, getDoc, setDoc, collection, getDocs } from "firebase/firestore";
-import { signInWithPopup, GoogleAuthProvider } from "firebase/auth";
 
 // Asynchronous helper to create a high-quality rounded clipping base64 image or a category emoji placeholder
 const getRoundedProductImage = async (url: string | undefined, emoji: string): Promise<string> => {
@@ -816,15 +813,19 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
             return;
           }
         }
-        
-        const userDocRef = doc(db, "users", currentUser.uid);
-        const userDocSnap = await getDoc(userDocRef);
-        if (userDocSnap.exists()) {
-          const existingLooks = userDocSnap.data()?.savedLooks || [];
-          if (existingLooks.some((x: any) => x.lookId === orderId || x.orderId === orderId)) {
-            setWardrobeSavingState('exists');
-            return;
+
+        try {
+          const res = await fetch(`/api/users/${currentUser.uid}`);
+          if (res.ok) {
+            const profile = await res.json();
+            const existingLooks = profile?.savedLooks || [];
+            if (existingLooks.some((x: any) => x.lookId === orderId || x.orderId === orderId)) {
+              setWardrobeSavingState('exists');
+              return;
+            }
           }
+        } catch (apiErr) {
+          console.warn("Could not check saved looks via API", apiErr);
         }
         setWardrobeSavingState('idle');
       } catch (e) {
@@ -838,17 +839,13 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
       try {
         let pool: Product[] = [];
         try {
-          const productsSnap = await getDocs(collection(db, "products"));
-          const dbProducts: Product[] = [];
-          productsSnap.forEach((docSnap) => {
-            const data = docSnap.data();
-            dbProducts.push({ id: docSnap.id, ...data } as Product);
-          });
-          if (dbProducts.length > 0) {
-            pool = dbProducts;
+          // `products` prop is already the real DynamoDB-backed catalog
+          // (fetched once in App.tsx via /api/products) -- no Firestore call needed.
+          if (products.length > 0) {
+            pool = products;
           }
         } catch (err) {
-          console.warn("Failed to fetch products from Firestore, falling back to props", err);
+          console.warn("Failed to use products prop, falling back to local data", err);
         }
         
         if (pool.length === 0) {
@@ -988,44 +985,28 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
   const handleGooglePay = async () => {
     try {
       setPaymentError(null);
-      const provider = new GoogleAuthProvider();
-      provider.setCustomParameters({
-        prompt: "select_account"
-      });
-      // Use Firebase login with signInWithPopup
-      const userCredential = await signInWithPopup(auth, provider);
-      const user = userCredential.user;
-      
-      const displayName = user.displayName || user.email?.split("@")[0] || "Google User";
-      const userEmail = user.email || "";
-
-      // 1. Get user document
-      const userDocRef = doc(db, "users", user.uid);
-      const userDocSnap = await getDoc(userDocRef).catch((snapErr) => {
-        handleFirestoreError(snapErr, OperationType.GET, `users/${user.uid}`);
-        throw snapErr;
-      });
-
-      let userProfile: UserProfile;
-      if (userDocSnap.exists()) {
-        userProfile = userDocSnap.data() as UserProfile;
-      } else {
-        userProfile = {
-          uid: user.uid,
-          email: userEmail,
-          fullName: displayName,
-          role: "shopper"
-        };
+      if (!currentUser?.uid) {
+        setPaymentError("Please sign in first.");
+        return;
       }
 
-      // 2. Save preferredPayment to users/{uid}
-      await setDoc(userDocRef, { ...userProfile, preferredPayment: "google" }, { merge: true })
-        .catch((saveErr) => {
-          handleFirestoreError(saveErr, OperationType.WRITE, `users/${user.uid}`);
-          throw saveErr;
-        });
+      const displayName = currentUser.fullName || currentUser.email?.split("@")[0] || "Shopper";
+      const userEmail = currentUser.email || "";
+      const updatedProfile: UserProfile = { ...currentUser, preferredPayment: "google" };
 
-      // Auto-fill form
+      // Persist the payment preference to DynamoDB (best-effort -- don't block
+      // the checkout UX on this)
+      try {
+        await fetch(`/api/users/${currentUser.uid}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(updatedProfile),
+        });
+      } catch (saveErr) {
+        console.warn("Could not persist preferredPayment to AWS", saveErr);
+      }
+
+      // Auto-fill form (demo card details, same as before)
       setPaymentForm(prev => ({
         ...prev,
         cardholderName: displayName,
@@ -1039,16 +1020,13 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
         email: userEmail
       });
       setConnectedPayment("google");
-      
+
       if (onLogin) {
-        onLogin({
-          ...userProfile,
-          preferredPayment: "google"
-        });
+        onLogin(updatedProfile);
       }
     } catch (err: any) {
-      console.error("Google Pay connection error:", err);
-      setPaymentError("Google authentication failed: " + (err.message || err));
+      console.error("Google Pay setup error:", err);
+      setPaymentError("Something went wrong setting up Google Pay: " + (err.message || err));
     }
   };
 
@@ -1311,129 +1289,61 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
     });
 
     if (currentUser?.uid) {
-      const isAuthenticated = auth.currentUser !== null && auth.currentUser.uid === currentUser.uid;
-
-      if (!isAuthenticated) {
-        console.warn(`[FitStyle AI] Local sandbox session detected for ${currentUser.uid}. Bypassing Firestore to avoid permission checks.`);
-        
-        // Load local wishlist if any exists
-        const localWish = localStorage.getItem(`wishlist_${currentUser.uid}`);
-        if (localWish) {
-          try {
-            setWishlist(JSON.parse(localWish));
-          } catch {
-            setWishlist(currentUser?.wishlist || []);
+      // Wishlist: try AWS first, fall back to localStorage
+      fetch(`/api/users/${currentUser.uid}`)
+        .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`API returned ${res.status}`))))
+        .then((profile) => {
+          if (Array.isArray(profile?.wishlist)) {
+            setWishlist(profile.wishlist);
+          } else {
+            throw new Error("no wishlist on profile yet");
           }
-        } else {
-          setWishlist(currentUser?.wishlist || []);
-        }
-
-        const savedProfileStr = localStorage.getItem(`bodyProfile_${currentUser.uid}`);
-        if (savedProfileStr) {
-          try {
-            const data = JSON.parse(savedProfileStr);
-            if (data.heightCm) setHeightCm(data.heightCm);
-            if (data.weightKg) setWeightKg(data.weightKg);
-            if (data.shoulderSize) setShoulderSize(data.shoulderSize);
-            if (data.waistSize) setWaistSize(data.waistSize);
-            if (data.hipSize) setHipSize(data.hipSize);
-            if (data.classifyDetails) setClassifyDetails(data.classifyDetails);
-            if (data.sizeRecommendation) setSizeRecommendation(data.sizeRecommendation);
-            
-            const calculatedJoints = calculateJointsFromMeasurements(
-              data.shoulderSize || 34,
-              data.waistSize || 26,
-              data.hipSize || 35
-            );
-            setGemmaJoints(calculatedJoints);
-          } catch (e) {
-            console.error("Decoding local storage bodyProfile failed:", e);
-          }
-        }
-      } else {
-        // Fetch User profile to sync updated wishlist
-        const userDocRef = doc(db, "users", currentUser.uid);
-        getDoc(userDocRef)
-          .then((userSnap) => {
-            if (userSnap.exists() && Array.isArray(userSnap.data()?.wishlist)) {
-              setWishlist(userSnap.data().wishlist);
-            } else {
+        })
+        .catch(() => {
+          const localWish = localStorage.getItem(`wishlist_${currentUser.uid}`);
+          if (localWish) {
+            try {
+              setWishlist(JSON.parse(localWish));
+            } catch {
               setWishlist(currentUser?.wishlist || []);
             }
-          })
-          .catch((err) => {
-            console.error("Firestore loading wishlist failed:", err);
+          } else {
             setWishlist(currentUser?.wishlist || []);
-          });
+          }
+        });
 
-        const docRef = doc(db, "users", currentUser.uid, "bodyProfile", "current");
-        getDoc(docRef)
-          .then((snap) => {
-            if (snap.exists()) {
-              const data = snap.data();
-              if (data.heightCm) setHeightCm(data.heightCm);
-              if (data.weightKg) setWeightKg(data.weightKg);
-              if (data.shoulderSize) setShoulderSize(data.shoulderSize);
-              if (data.waistSize) setWaistSize(data.waistSize);
-              if (data.hipSize) setHipSize(data.hipSize);
-              if (data.classifyDetails) setClassifyDetails(data.classifyDetails);
-              if (data.sizeRecommendation) setSizeRecommendation(data.sizeRecommendation);
-              
-              const calculatedJoints = calculateJointsFromMeasurements(
-                data.shoulderSize || 34,
-                data.waistSize || 26,
-                data.hipSize || 35
-              );
-              setGemmaJoints(calculatedJoints);
+      // Body measurements: try AWS first, fall back to localStorage
+      const applyProfileData = (data: any) => {
+        if (data.heightCm) setHeightCm(data.heightCm);
+        if (data.weightKg) setWeightKg(data.weightKg);
+        if (data.shoulderSize) setShoulderSize(data.shoulderSize);
+        if (data.waistSize) setWaistSize(data.waistSize);
+        if (data.hipSize) setHipSize(data.hipSize);
+        if (data.classifyDetails) setClassifyDetails(data.classifyDetails);
+        if (data.sizeRecommendation) setSizeRecommendation(data.sizeRecommendation);
+
+        const calculatedJoints = calculateJointsFromMeasurements(
+          data.shoulderSize || 34,
+          data.waistSize || 26,
+          data.hipSize || 35
+        );
+        setGemmaJoints(calculatedJoints);
+      };
+
+      fetch(`/api/measurements/${currentUser.uid}`)
+        .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`API returned ${res.status}`))))
+        .then((data) => applyProfileData(data))
+        .catch((err) => {
+          console.warn("[FitStyle AI] Measurements API unavailable, falling back to local cache:", err);
+          const savedProfileStr = localStorage.getItem(`bodyProfile_${currentUser.uid}`);
+          if (savedProfileStr) {
+            try {
+              applyProfileData(JSON.parse(savedProfileStr));
+            } catch (parseErr) {
+              console.error("Failed to parse local profile cache:", parseErr);
             }
-          })
-          .catch((err) => {
-            console.error("Firestore loading bodyProfile failed:", err);
-            console.warn(`[FitStyle AI] Falling back to local profile cache for ${currentUser.uid}`);
-
-            const applyProfileData = (data: any) => {
-              if (data.heightCm) setHeightCm(data.heightCm);
-              if (data.weightKg) setWeightKg(data.weightKg);
-              if (data.shoulderSize) setShoulderSize(data.shoulderSize);
-              if (data.waistSize) setWaistSize(data.waistSize);
-              if (data.hipSize) setHipSize(data.hipSize);
-              if (data.classifyDetails) setClassifyDetails(data.classifyDetails);
-              if (data.sizeRecommendation) setSizeRecommendation(data.sizeRecommendation);
-
-              const calculatedJoints = calculateJointsFromMeasurements(
-                data.shoulderSize || 34,
-                data.waistSize || 26,
-                data.hipSize || 35
-              );
-              setGemmaJoints(calculatedJoints);
-            };
-
-            const savedProfileStr = localStorage.getItem(`bodyProfile_${currentUser.uid}`);
-            if (savedProfileStr) {
-              try {
-                applyProfileData(JSON.parse(savedProfileStr));
-                return;
-              } catch (parseErr) {
-                console.error("Failed to parse local profile cache:", parseErr);
-              }
-            }
-
-            const fallbackUserDocRef = doc(db, "users", currentUser.uid);
-            getDoc(fallbackUserDocRef)
-              .then((userSnap) => {
-                if (userSnap.exists()) {
-                  const fallbackData = userSnap.data()?.bodyProfile_current;
-                  if (fallbackData) {
-                    console.warn(`[FitStyle AI] Loaded fallback bodyProfile_current from users/${currentUser.uid}`);
-                    applyProfileData(fallbackData);
-                  }
-                }
-              })
-              .catch((fallbackErr) => {
-                console.warn("Failed to load fallback bodyProfile from user doc:", fallbackErr);
-              });
-          });
-      }
+          }
+        });
     }
   }, [currentUser?.uid]);
 
@@ -1452,38 +1362,34 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
     // Save to local storage for quick sync
     localStorage.setItem(`wishlist_${currentUser.uid}`, JSON.stringify(newWishlist));
     
-    // If authenticated, also save to Firestore in users/{uid}
-    const isAuthenticated = auth.currentUser !== null && auth.currentUser.uid === currentUser.uid;
-    if (isAuthenticated) {
-      try {
-        setWishlistSavingState('saving');
-        const userDocRef = doc(db, "users", currentUser.uid);
-        await setDoc(userDocRef, {
-          wishlist: newWishlist
-        }, { merge: true });
-        
-        // Update current local user session wishlist so other views can see it
-        if (onLogin) {
-          onLogin({
-            ...currentUser,
-            wishlist: newWishlist
-          });
-        }
-        setWishlistSavingState('saved');
-        setTimeout(() => setWishlistSavingState('idle'), 2000);
-      } catch (err) {
-        console.error("Failed to save wishlist to Firestore:", err);
-        handleFirestoreError(err, OperationType.WRITE, `users/${currentUser.uid}`);
-        setWishlistSavingState('idle');
-      }
-    } else {
-      // Local sandbox session update prop
+    // Save to AWS
+    try {
+      setWishlistSavingState('saving');
+      const res = await fetch(`/api/users/${currentUser.uid}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...currentUser, wishlist: newWishlist }),
+      });
+      if (!res.ok) throw new Error(`API returned ${res.status}`);
+
+      // Update current local user session wishlist so other views can see it
       if (onLogin) {
         onLogin({
           ...currentUser,
           wishlist: newWishlist
         });
       }
+      setWishlistSavingState('saved');
+      setTimeout(() => setWishlistSavingState('idle'), 2000);
+    } catch (err) {
+      console.warn("Failed to save wishlist to AWS, kept locally only:", err);
+      if (onLogin) {
+        onLogin({
+          ...currentUser,
+          wishlist: newWishlist
+        });
+      }
+      setWishlistSavingState('idle');
     }
   };
 
@@ -1698,7 +1604,7 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
         );
       }
 
-      // Save bodyProfile to Firestore users/{uid}/bodyProfile after Grok scan
+      // Save body measurements to AWS and keep a local backup.
       let profileData: any = null;
       try {
         if (currentUser?.uid) {
@@ -1725,30 +1631,22 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
           localStorage.setItem(`bodyProfile_${currentUser.uid}`, JSON.stringify(profileData));
           console.log(`Successfully backed up bodyProfile to local storage for ${currentUser.uid}`);
 
-          const isAuthenticated = auth.currentUser !== null && auth.currentUser.uid === currentUser.uid;
-          if (isAuthenticated) {
-            const profileDocRef = doc(db, "users", currentUser.uid, "bodyProfile", "current");
-            await setDoc(profileDocRef, profileData);
-            console.log("Successfully saved bodyProfile to users/" + currentUser.uid + "/bodyProfile/current");
-          } else {
-            console.warn(`[FitStyle AI] Local sandbox session detected for ${currentUser.uid}. Skipping Firestore write.`);
+          try {
+            const res = await fetch(`/api/measurements/${currentUser.uid}`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(profileData),
+            });
+            if (!res.ok) {
+              throw new Error(`API returned ${res.status}`);
+            }
+            console.log("Successfully saved body measurements to AWS for " + currentUser.uid);
+          } catch (awsErr) {
+            console.warn("Could not save measurements to AWS, kept local data only:", awsErr);
           }
         }
       } catch (saveErr) {
-        console.error("Failed to save bodyProfile to Firestore:", saveErr);
-
-        if (currentUser?.uid && profileData) {
-          try {
-            const fallbackDocRef = doc(db, "users", currentUser.uid);
-            await setDoc(fallbackDocRef, { bodyProfile_current: profileData }, { merge: true });
-            console.warn(`Saved fallback bodyProfile_current to users/${currentUser.uid} after Firestore subcollection write failed.`);
-          } catch (fallbackErr) {
-            console.error("Fallback save of bodyProfile_current also failed:", fallbackErr);
-            handleFirestoreError(fallbackErr, OperationType.WRITE, `users/${currentUser.uid}/bodyProfile_current`);
-          }
-        } else {
-          handleFirestoreError(saveErr, OperationType.WRITE, `users/${currentUser?.uid || "unknown"}/bodyProfile/current`);
-        }
+        console.error("Failed to save measured body profile:", saveErr);
       }
 
     } catch (err) {
@@ -3709,18 +3607,18 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
                               localStorage.setItem(savedOrdersKey, JSON.stringify(existingOrders));
                               console.log(`Successfully saved order ${orderId} to local storage for ${currentUser.uid}`);
 
-                              const isAuthenticated = auth.currentUser !== null && auth.currentUser.uid === currentUser.uid;
-                              if (isAuthenticated) {
-                                const orderDocRef = doc(db, "users", currentUser.uid, "orderHistory", orderId);
-                                setDoc(orderDocRef, currentOrderData).then(() => {
-                                  console.log("Successfully saved order to Firestore users/" + currentUser.uid + "/orderHistory/" + orderId);
-                                }).catch(err => {
-                                  console.error("setDoc failed for orderHistory", err);
-                                  handleFirestoreError(err, OperationType.WRITE, `users/${currentUser.uid}/orderHistory/${orderId}`);
+                              fetch(`/api/orders/${orderId}`, {
+                                method: "PUT",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ ...currentOrderData, userId: currentUser.uid }),
+                              })
+                                .then((res) => {
+                                  if (!res.ok) throw new Error(`API returned ${res.status}`);
+                                  console.log("Successfully saved order to DynamoDB: " + orderId);
+                                })
+                                .catch((err) => {
+                                  console.warn("Could not save order to AWS, kept in localStorage only:", err);
                                 });
-                              } else {
-                                console.warn(`[FitStyle AI] Local sandbox session detected for ${currentUser.uid}. Skipping Firestore orderHistory write.`);
-                              }
                             } catch (err) {
                               console.error("Setup error for order saving:", err);
                             }
@@ -3797,28 +3695,23 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
         localStorage.setItem(savedOrdersKey, JSON.stringify(localLooks));
       }
 
-      // 2. Write to Firestore users/{uid} in savedLooks array
-      const userDocRef = doc(db, "users", currentUser.uid);
-      const userDocSnap = await getDoc(userDocRef);
-      let existingLooks: any[] = [];
-      let currentData: any = {};
-      if (userDocSnap.exists()) {
-        currentData = userDocSnap.data() || {};
-        existingLooks = currentData.savedLooks || [];
-      }
-      
+      // 2. Write to DynamoDB via /api/users (savedLooks field on the profile)
+      const profileRes = await fetch(`/api/users/${currentUser.uid}`);
+      const currentData: any = profileRes.ok ? await profileRes.json() : {};
+      const existingLooks: any[] = currentData.savedLooks || [];
+
       if (!existingLooks.some((x: any) => (x.lookId === orderId || x.orderId === orderId))) {
         const updatedLooks = [newLook, ...existingLooks];
-        await setDoc(userDocRef, {
-          ...currentData,
-          savedLooks: updatedLooks
-        }, { merge: true });
+        await fetch(`/api/users/${currentUser.uid}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...currentData, savedLooks: updatedLooks }),
+        });
       }
 
       setWardrobeSavingState('saved');
     } catch (err) {
       console.error("Failed to save to wardrobe:", err);
-      handleFirestoreError(err, OperationType.WRITE, `users/${currentUser.uid}`);
       setWardrobeSavingState('idle');
     }
   };
@@ -3916,20 +3809,16 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
       localLooks.unshift(newLook);
       localStorage.setItem(savedOrdersKey, JSON.stringify(localLooks));
 
-      // Firestore write
-      const userDocRef = doc(db, "users", currentUser.uid);
-      const userDocSnap = await getDoc(userDocRef);
-      let existingLooks: any[] = [];
-      let currentData: any = {};
-      if (userDocSnap.exists()) {
-        currentData = userDocSnap.data() || {};
-        existingLooks = currentData.savedLooks || [];
-      }
+      // Write to DynamoDB via /api/users (savedLooks field on the profile)
+      const profileRes2 = await fetch(`/api/users/${currentUser.uid}`);
+      const currentData: any = profileRes2.ok ? await profileRes2.json() : {};
+      const existingLooks: any[] = currentData.savedLooks || [];
       const updatedLooks = [newLook, ...existingLooks];
-      await setDoc(userDocRef, {
-        ...currentData,
-        savedLooks: updatedLooks
-      }, { merge: true });
+      await fetch(`/api/users/${currentUser.uid}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...currentData, savedLooks: updatedLooks }),
+      });
 
       setQuickAddSaved((prev) => ({ ...prev, [sugId]: 'saved' }));
       setTimeout(() => {

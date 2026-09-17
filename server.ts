@@ -447,6 +447,73 @@ app.delete("/api/users/:id", async (req: Request, res: Response) => {
   }
 });
 
+const MEASUREMENTS_TABLE = process.env.DYNAMODB_MEASUREMENTS_TABLE || "fitstyle-ai-Measurements";
+const ORDERS_TABLE = process.env.DYNAMODB_ORDERS_TABLE || "fitstyle-ai-Orders";
+
+// Measurements API -- one item per user (hash key userId), replaces the old
+// Firestore users/{uid}/bodyProfile/current subcollection document.
+app.get("/api/measurements/:userId", async (req: Request, res: Response) => {
+  const { userId } = req.params;
+  try {
+    const result: any = await ddb.send(
+      new GetCommand({ TableName: MEASUREMENTS_TABLE, Key: { userId } })
+    );
+    if (!result.Item) {
+      return res.status(404).json({ error: "No measurements saved yet" });
+    }
+    res.json(result.Item);
+  } catch (err) {
+    console.error("[DynamoDB] Failed to fetch measurements:", err);
+    res.status(500).json({ error: "Failed to fetch measurements" });
+  }
+});
+
+app.put("/api/measurements/:userId", async (req: Request, res: Response) => {
+  const { userId } = req.params;
+  const item = { ...req.body, userId };
+  try {
+    await ddb.send(new PutCommand({ TableName: MEASUREMENTS_TABLE, Item: item }));
+    res.json(item);
+  } catch (err) {
+    console.error("[DynamoDB] Failed to save measurements:", err);
+    res.status(500).json({ error: "Failed to save measurements" });
+  }
+});
+
+// Orders API -- one item per order (hash key orderId), replaces the old
+// Firestore users/{uid}/orderHistory/{orderId} subcollection.
+// Listing "my orders" uses Scan+filter rather than a Global Secondary Index --
+// simpler and avoids allocating extra RCU/WCU out of our 25/25 free-tier
+// budget. Fine at this project's scale; revisit if the Orders table grows large.
+app.get("/api/orders/user/:userId", async (req: Request, res: Response) => {
+  const { userId } = req.params;
+  try {
+    const result: any = await ddb.send(
+      new ScanCommand({
+        TableName: ORDERS_TABLE,
+        FilterExpression: "userId = :uid",
+        ExpressionAttributeValues: { ":uid": userId },
+      })
+    );
+    res.json(result.Items || []);
+  } catch (err) {
+    console.error("[DynamoDB] Failed to list orders:", err);
+    res.status(500).json({ error: "Failed to list orders" });
+  }
+});
+
+app.put("/api/orders/:orderId", async (req: Request, res: Response) => {
+  const { orderId } = req.params;
+  const item = { ...req.body, orderId };
+  try {
+    await ddb.send(new PutCommand({ TableName: ORDERS_TABLE, Item: item }));
+    res.json(item);
+  } catch (err) {
+    console.error("[DynamoDB] Failed to save order:", err);
+    res.status(500).json({ error: "Failed to save order" });
+  }
+});
+
 function fallbackColors(skinTone: string, undertone: string): { name: string, hex: string }[] {
   const sk = (skinTone || "Medium").toLowerCase();
   const ut = (undertone || "Warm").toLowerCase();
