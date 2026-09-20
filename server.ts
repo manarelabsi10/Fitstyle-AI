@@ -514,6 +514,81 @@ app.put("/api/orders/:orderId", async (req: Request, res: Response) => {
   }
 });
 
+// List all users -- used by the admin Sales Analytics dashboard (e.g. active
+// signup count). Small dataset (admin-only usage, infrequent), Scan is fine.
+app.get("/api/users", async (req: Request, res: Response) => {
+  try {
+    const result: any = await ddb.send(new ScanCommand({ TableName: USERS_TABLE }));
+    res.json(result.Items || []);
+  } catch (err) {
+    console.error("[DynamoDB] Failed to list users:", err);
+    res.status(500).json({ error: "Failed to list users" });
+  }
+});
+
+// Analytics feed for the admin Sales Analytics dashboard. Joins Orders +
+// Users + Measurements server-side (was 3 separate Firestore real-time
+// listeners with nested reads) into the exact shape the dashboard already
+// expects. No push/real-time here -- the frontend polls this on an interval
+// instead, which is the simplest free-tier-safe substitute for Firestore's
+// onSnapshot (a true push mechanism would mean API Gateway WebSockets +
+// DynamoDB Streams, more moving parts than this project needs).
+app.get("/api/analytics/orders", async (req: Request, res: Response) => {
+  try {
+    const [usersResult, measurementsResult, ordersResult]: any[] = await Promise.all([
+      ddb.send(new ScanCommand({ TableName: USERS_TABLE })),
+      ddb.send(new ScanCommand({ TableName: MEASUREMENTS_TABLE })),
+      ddb.send(new ScanCommand({ TableName: ORDERS_TABLE })),
+    ]);
+
+    const usersById: Record<string, any> = {};
+    (usersResult.Items || []).forEach((u: any) => { usersById[u.userId || u.uid] = u; });
+
+    const measurementsById: Record<string, any> = {};
+    (measurementsResult.Items || []).forEach((m: any) => { measurementsById[m.userId] = m; });
+
+    const analyticsOrders = (ordersResult.Items || []).map((order: any) => {
+      const user = usersById[order.userId] || {};
+      const measurements = measurementsById[order.userId] || {};
+
+      const outfit = order.outfit || {};
+      const itemsArr: string[] = [];
+      if (outfit.top) itemsArr.push(outfit.top.name);
+      if (outfit.bottom) itemsArr.push(outfit.bottom.name);
+      if (outfit.footwear) itemsArr.push(outfit.footwear.name);
+      if (outfit.accessories) itemsArr.push(outfit.accessories.name);
+
+      let computedOccasion = "Casual";
+      if (outfit.top) {
+        const matchedProd = dbProducts.find((p: any) => p.id === outfit.top.id);
+        if (matchedProd && matchedProd.occasion) computedOccasion = matchedProd.occasion;
+      }
+
+      return {
+        orderId: order.orderId,
+        date: order.date || new Date().toISOString(),
+        totalAmount: Number(order.totalAmount) || 0,
+        sizing: order.sizing || "M",
+        shippingAddress: order.shippingAddress || "FitStyle Elite Resident",
+        customerName: user.fullName || "Elite Resident",
+        customerEmail: user.email || "shopper@fitstyle.ai",
+        occasion: computedOccasion,
+        bodyShape: measurements.classifyDetails?.shape || "Hourglass",
+        skinTone: measurements.sizeRecommendation?.skinTone || "Olive",
+        status: "Completed",
+        items: itemsArr.length > 0 ? itemsArr : ["Apparel Pack"],
+        itemsCount: itemsArr.length || 1,
+      };
+    });
+
+    analyticsOrders.sort((a: any, b: any) => b.date.localeCompare(a.date));
+    res.json(analyticsOrders);
+  } catch (err) {
+    console.error("[DynamoDB] Failed to build analytics feed:", err);
+    res.status(500).json({ error: "Failed to build analytics feed" });
+  }
+});
+
 function fallbackColors(skinTone: string, undertone: string): { name: string, hex: string }[] {
   const sk = (skinTone || "Medium").toLowerCase();
   const ut = (undertone || "Warm").toLowerCase();
