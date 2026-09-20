@@ -38,41 +38,68 @@ export default function WardrobePage({ products, uid, onNavigateToStudio }: Ward
       });
     }
 
-    // 2. Parse previous orders in localStorage to dynamically add bought clothes!
+    const addOrderItems = (orders: any[], target: Product[]) => {
+      orders.forEach(order => {
+        if (order && order.outfit) {
+          Object.entries(order.outfit).forEach(([cat, item]: [string, any]) => {
+            if (item && item.id) {
+              if (!target.some(p => p && p.id === item.id)) {
+                target.push({
+                  id: item.id,
+                  name: item.name,
+                  price: item.price,
+                  image: item.image || "https://images.unsplash.com/photo-1595777457583-95e059d581b8?auto=format&fit=crop&q=80&w=600",
+                  category: cat as any,
+                  size: order.sizing || "M",
+                  colour: "Bespoke Selection",
+                  occasion: (order.outfit.top?.occasion || "Wedding") as any
+                });
+              }
+            }
+          });
+        }
+      });
+    };
+
+    // 2. Immediate fallback: localStorage (covers right after checkout, before
+    // this page has re-fetched from AWS)
     const savedOrdersKey = `orders_${uid}`;
     const ordersStr = localStorage.getItem(savedOrdersKey);
     if (ordersStr) {
       try {
-        const orders = JSON.parse(ordersStr);
-        if (Array.isArray(orders)) {
-          orders.forEach(order => {
-            if (order && order.outfit) {
-              Object.entries(order.outfit).forEach(([cat, item]: [string, any]) => {
-                if (item && item.id) {
-                  // Avoid duplicates
-                  if (!initialWardrobe.some(p => p && p.id === item.id)) {
-                    initialWardrobe.push({
-                      id: item.id,
-                      name: item.name,
-                      price: item.price,
-                      image: item.image || "https://images.unsplash.com/photo-1595777457583-95e059d581b8?auto=format&fit=crop&q=80&w=600",
-                      category: cat as any,
-                      size: order.sizing || "M",
-                      colour: "Bespoke Selection",
-                      occasion: (order.outfit.top?.occasion || "Wedding") as any
-                    });
-                  }
-                }
-              });
-            }
-          });
+        const localOrders = JSON.parse(ordersStr);
+        if (Array.isArray(localOrders)) {
+          addOrderItems(localOrders, initialWardrobe);
         }
       } catch (err) {
         console.error("Failed to parse wardrobe orders snapshot", err);
       }
     }
 
-    // 3. Strict final deduplication by ID to prevent any duplicate key errors and clean rendering
+    // 3. Real source of truth: AWS (works across devices/browsers, not just this one)
+    if (uid) {
+      fetch(`/api/orders/user/${uid}`)
+        .then((res) => (res.ok ? res.json() : []))
+        .then((awsOrders: any[]) => {
+          if (Array.isArray(awsOrders) && awsOrders.length > 0) {
+            const merged = [...initialWardrobe];
+            addOrderItems(awsOrders, merged);
+
+            const seenIds = new Set<string>();
+            const finalWardrobe: Product[] = [];
+            merged.forEach(p => {
+              if (p && p.id && !seenIds.has(p.id)) {
+                seenIds.add(p.id);
+                finalWardrobe.push(p);
+              }
+            });
+            setWardrobeItems(finalWardrobe);
+          }
+        })
+        .catch((err) => console.warn("Could not fetch orders from AWS for wardrobe", err));
+    }
+
+    // 4. Strict final deduplication for the initial (localStorage-based) render
     const seenIds = new Set<string>();
     const finalWardrobe: Product[] = [];
     initialWardrobe.forEach(p => {

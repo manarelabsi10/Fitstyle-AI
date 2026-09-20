@@ -1,8 +1,4 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { 
-  collection, onSnapshot, doc, getDoc, getDocs 
-} from "firebase/firestore";
-import { db, auth, handleFirestoreError, OperationType } from "../firebase";
 import { Product, UserProfile } from "../types";
 import { 
   TrendingUp, ShoppingBag, Award, Users, FileText, 
@@ -73,119 +69,36 @@ export default function SalesAnalyticsDashboard({ products }: SalesAnalyticsDash
     }, 4000);
   };
 
-  // --- 1. FIRESTORE REAL-TIME LISTENERS ---
+  // --- 1. AWS POLLING (replaces the old Firestore real-time listeners) ---
   useEffect(() => {
-    // A. Listen to users
-    const usersRef = collection(db, "users");
-    const unsubUsers = onSnapshot(usersRef, (snapshot) => {
-      const usersList: DBUser[] = [];
-      snapshot.forEach((docSnap) => {
-        usersList.push({ uid: docSnap.id, ...docSnap.data() });
-      });
-      setFirestoreUsers(usersList);
-    }, (err) => {
-      console.warn("Failed to listen to users for sales analytics real-time update:", err);
-    });
+    let cancelled = false;
+
+    const loadAnalyticsData = async () => {
+      try {
+        const [usersRes, ordersRes] = await Promise.all([
+          fetch("/api/users"),
+          fetch("/api/analytics/orders"),
+        ]);
+        if (!cancelled && usersRes.ok) {
+          setFirestoreUsers(await usersRes.json());
+        }
+        if (!cancelled && ordersRes.ok) {
+          const orders: AnalyticsOrder[] = await ordersRes.json();
+          firestoreOrdersListUpdate(orders);
+        }
+      } catch (err) {
+        console.warn("Failed to load analytics data from AWS:", err);
+      }
+    };
+
+    loadAnalyticsData();
+    const intervalId = setInterval(loadAnalyticsData, 20000); // poll every 20s
 
     return () => {
-      unsubUsers();
+      cancelled = true;
+      clearInterval(intervalId);
     };
   }, []);
-
-  // B. Listen to all orderHistory subcollections of each loaded user in real-time
-  useEffect(() => {
-    if (firestoreUsers.length === 0) return;
-
-    const unsubs: (() => void)[] = [];
-    const userOrdersMap: { [userId: string]: AnalyticsOrder[] } = {};
-
-    firestoreUsers.forEach((user) => {
-      const orderHistoryRef = collection(db, "users", user.uid, "orderHistory");
-      const bodyProfileRef = doc(db, "users", user.uid, "bodyProfile", "current");
-
-      // We listen to the user's orderHistory
-      const unsubOrders = onSnapshot(orderHistoryRef, async (orderSnap) => {
-        let userBodyShape = "Hourglass";
-        let userSkinTone = "Olive";
-
-        let profileData: any = null;
-        try {
-          const profileDoc = await getDoc(bodyProfileRef);
-          if (profileDoc.exists()) {
-            profileData = profileDoc.data();
-          }
-        } catch (e) {
-          console.warn(`Failed to load nested bodyProfile for ${user.uid}, trying fallback top-level user doc.`, e);
-        }
-
-        if (!profileData) {
-          try {
-            const userDoc = await getDoc(doc(db, "users", user.uid));
-            if (userDoc.exists()) {
-              profileData = userDoc.data()?.bodyProfile_current;
-            }
-          } catch (e) {
-            console.warn(`Failed to load fallback bodyProfile_current from users/${user.uid}:`, e);
-          }
-        }
-
-        if (profileData) {
-          userBodyShape = profileData.classifyDetails?.shape || "Hourglass";
-          userSkinTone = profileData.sizeRecommendation?.skinTone || "Olive";
-        }
-
-        const ordersList: AnalyticsOrder[] = [];
-        orderSnap.forEach((docSnap) => {
-          const oData = docSnap.data();
-          
-          // Formulate outfit items
-          const outfit = oData.outfit || {};
-          const itemsArr: string[] = [];
-          if (outfit.top) itemsArr.push(outfit.top.name);
-          if (outfit.bottom) itemsArr.push(outfit.bottom.name);
-          if (outfit.footwear) itemsArr.push(outfit.footwear.name);
-          if (outfit.accessories) itemsArr.push(outfit.accessories.name);
-
-          // Get product category or occasion from catalog of objects if possible
-          let computedOccasion = "Casual";
-          if (outfit.top) {
-            const matchedProd = products.find(p => p.id === outfit.top.id);
-            if (matchedProd && matchedProd.occasion) computedOccasion = matchedProd.occasion;
-          }
-
-          ordersList.push({
-            orderId: docSnap.id,
-            date: oData.date || new Date().toISOString(),
-            totalAmount: Number(oData.totalAmount) || 0,
-            sizing: oData.sizing || "M",
-            shippingAddress: oData.shippingAddress || "FitStyle Elite Resident",
-            customerName: user.fullName || "Elite Resident",
-            customerEmail: user.email || "shopper@fitstyle.ai",
-            occasion: computedOccasion,
-            bodyShape: userBodyShape,
-            skinTone: userSkinTone,
-            status: "Completed", // Completed by default for real checkouts
-            items: itemsArr.length > 0 ? itemsArr : ["Apparel Pack"],
-            itemsCount: itemsArr.length || 1
-          });
-        });
-
-        userOrdersMap[user.uid] = ordersList;
-
-        // Recombine all orders from the map
-        const combinedOrders = Object.values(userOrdersMap).flat();
-        firestoreOrdersListUpdate(combinedOrders);
-      }, (err) => {
-        console.warn(`Failed to listen to orderHistory for user ${user.uid}:`, err);
-      });
-
-      unsubs.push(unsubOrders);
-    });
-
-    return () => {
-      unsubs.forEach(unsub => unsub());
-    };
-  }, [firestoreUsers, products]);
 
   const firestoreOrdersListUpdate = (orders: AnalyticsOrder[]) => {
     // Sort youngest first
