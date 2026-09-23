@@ -334,6 +334,48 @@ app.get("/api/products", (req: Request, res: Response) => {
   res.json(dbProducts);
 });
 
+app.post("/api/upload-image", async (req: Request, res: Response) => {
+  try {
+    const { productId, fileName, base64Data, contentType } = req.body;
+    if (!base64Data) {
+      return res.status(400).json({ error: "Missing image data" });
+    }
+
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!supabaseUrl || !serviceKey) {
+      return res.status(500).json({ error: "Supabase not configured on the server" });
+    }
+
+    const buffer = Buffer.from(base64Data, "base64");
+    const storagePath = `products/${productId}/${Date.now()}-${fileName || "image"}.webp`;
+    const uploadUrl = `${supabaseUrl}/storage/v1/object/product-images/${storagePath}`;
+
+    const uploadRes = await fetch(uploadUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${serviceKey}`,
+        apikey: serviceKey,
+        "Content-Type": contentType || "image/webp",
+        "x-upsert": "true",
+      },
+      body: buffer,
+    });
+
+    if (!uploadRes.ok) {
+      const errText = await uploadRes.text();
+      console.error("[Supabase] Upload failed:", uploadRes.status, errText);
+      return res.status(500).json({ error: "Image upload failed" });
+    }
+
+    const publicUrl = `${supabaseUrl}/storage/v1/object/public/product-images/${storagePath}`;
+    res.json({ url: publicUrl });
+  } catch (err) {
+    console.error("[Supabase] Upload route error:", err);
+    res.status(500).json({ error: "Image upload failed" });
+  }
+});
+
 app.post("/api/products", async (req: Request, res: Response) => {
   const newItem = {
     id: `prod-${Date.now()}`,
