@@ -16,6 +16,7 @@
     "@emailjs/browser": "^4.4.1",
     "@google/genai": "^2.4.0",
     "@gradio/client": "^2.2.1",
+    "@supabase/supabase-js": "^2.116.0",
     "@tailwindcss/vite": "^4.1.14",
     "@tensorflow-models/posenet": "^2.2.2",
     "@tensorflow/tfjs": "^4.22.0",

@@ -1,11 +1,9 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { 
-  Plus, Trash2, Edit3, X, Image, Tag, DollarSign, 
+  Plus, Trash2, Edit3, X, Image as ImageIcon, Tag, DollarSign, 
   PlusCircle, Check, LogOut, Download, AlertTriangle, 
   Heart, Search, HelpCircle, BarChart3 
 } from "lucide-react";
-import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
-import { storage } from "../firebase";
 import { Product, CategoryType, OccasionType, UserProfile } from "../types";
 import SalesAnalyticsDashboard from "./SalesAnalyticsDashboard";
 
@@ -126,6 +124,20 @@ export default function AdminDashboard({
     return result;
   }, [products, searchQuery, filterCategory, filterOccasion, filterSize, sortBy]);
 
+    // Pagination -- render one page at a time for large catalogues.
+    const PRODUCTS_PER_PAGE = 50;
+    const [currentPage, setCurrentPage] = useState(1);
+    const totalPages = Math.max(1, Math.ceil(processedProducts.length / PRODUCTS_PER_PAGE));
+
+    useEffect(() => {
+      setCurrentPage(1);
+    }, [searchQuery, filterCategory, filterOccasion, filterSize, sortBy]);
+
+    const paginatedProducts = useMemo(() => {
+      const start = (currentPage - 1) * PRODUCTS_PER_PAGE;
+      return processedProducts.slice(start, start + PRODUCTS_PER_PAGE);
+    }, [processedProducts, currentPage]);
+
   const uploadImageFile = async (file: File): Promise<string> => {
     setUploadError("");
     setUploadStatus("Compressing and uploading photo...");
@@ -134,7 +146,7 @@ export default function AdminDashboard({
 
     const previewUrl = URL.createObjectURL(file);
     const canvas = document.createElement('canvas');
-    const img = new Image();
+    const img = new window.Image();
 
     const uploadPromise = new Promise<string>((resolve, reject) => {
       img.onerror = () => reject(new Error('Invalid image file'));
@@ -164,34 +176,41 @@ export default function AdminDashboard({
           ctx.drawImage(img, 0, 0, width, height);
           const fileMb = file.size / 1024 / 1024;
           const quality = fileMb > 4 ? 0.5 : fileMb > 2 ? 0.6 : 0.7;
-          canvas.toBlob((blob) => {
+          canvas.toBlob(async (blob) => {
             if (!blob) {
               reject(new Error('Image compression failed'));
               return;
             }
-            const storageRef = ref(storage, `products/${currentProductId}/${file.name}`);
-            const uploadTask = uploadBytesResumable(storageRef, blob);
-            uploadTask.on(
-              'state_changed',
-              (snapshot) => {
-                const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
-                setUploadProgress(progress);
-                if (progress === 100) {
-                  setUploadStatus('Upload complete. Finalizing...');
-                }
-              },
-              (err) => {
-                reject(err);
-              },
-              async () => {
+            try {
+              setUploadStatus('Uploading to storage...');
+              const reader = new FileReader();
+              reader.onloadend = async () => {
                 try {
-                  const url = await getDownloadURL(uploadTask.snapshot.ref);
+                  const base64Data = (reader.result as string).split(',')[1];
+                  const response = await fetch('/api/upload-image', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      productId: currentProductId,
+                      fileName: file.name,
+                      base64Data,
+                      contentType: 'image/webp',
+                    }),
+                  });
+                  if (!response.ok) throw new Error(`Upload API returned ${response.status}`);
+                  const { url } = await response.json();
+                  setUploadProgress(100);
+                  setUploadStatus('Upload complete. Finalizing...');
                   resolve(url);
                 } catch (err) {
                   reject(err);
                 }
-              }
-            );
+              };
+              reader.onerror = () => reject(new Error('Failed to read compressed image'));
+              reader.readAsDataURL(blob);
+            } catch (err) {
+              reject(err);
+            }
           }, 'image/webp', quality);
         } catch (innerErr) {
           reject(innerErr);
@@ -201,7 +220,7 @@ export default function AdminDashboard({
     });
 
     const timeoutPromise = new Promise<string>((_, reject) => {
-      setTimeout(() => reject(new Error("Image upload timed out after 8s (Firebase Storage unreachable -- image hosting isn't wired to AWS yet)")), 8000);
+      setTimeout(() => reject(new Error("Image upload timed out after 8s (Supabase Storage unreachable)")), 8000);
     });
 
     let compressedUrl: string;
@@ -258,7 +277,7 @@ export default function AdminDashboard({
           occasion,
           size,
           price,
-          image,
+          image: imageUrl,
           colour,
           inStock
         }));
@@ -323,7 +342,7 @@ export default function AdminDashboard({
 
   const triggerAdd = () => {
     setEditingItem(null);
-    setCurrentProductId(`prod-${Date.now()}`); // Generate stable ID for Firestore document and Storage upload path
+    setCurrentProductId(`prod-${Date.now()}`); 
     setName("");
     setCategory("top");
     setOccasion("Casual");
@@ -600,12 +619,12 @@ export default function AdminDashboard({
                   <th className="py-4 px-6 w-12 text-center">
                     <input
                       type="checkbox"
-                      checked={processedProducts.length > 0 && selectedIds.length === processedProducts.length}
+                      checked={paginatedProducts.length > 0 && paginatedProducts.every((product) => selectedIds.includes(product.id))}
                       onChange={(e) => {
                         if (e.target.checked) {
-                          setSelectedIds(processedProducts.map(p => p.id));
+                          setSelectedIds(paginatedProducts.map(p => p.id));
                         } else {
-                          setSelectedIds([]);
+                          setSelectedIds((prev) => prev.filter((id) => !paginatedProducts.some((product) => product.id === id)));
                         }
                       }}
                       className="rounded border-slate-300 text-[#5a005a] focus:ring-[#5a005a] w-4 h-4 cursor-pointer"
@@ -628,7 +647,7 @@ export default function AdminDashboard({
                     </td>
                   </tr>
                 ) : (
-                  processedProducts.map((item) => (
+                  paginatedProducts.map((item) => (
                     <tr 
                       key={item.id} 
                       className={`hover:bg-slate-50/50 transition-all ${
@@ -738,6 +757,35 @@ export default function AdminDashboard({
               </tbody>
             </table>
           </div>
+
+          {processedProducts.length > 0 && (
+            <div className="flex items-center justify-between px-6 py-4 border-t border-slate-100">
+              <p className="text-xs text-slate-500 font-sans">
+                Showing {((currentPage - 1) * PRODUCTS_PER_PAGE) + 1}-{Math.min(currentPage * PRODUCTS_PER_PAGE, processedProducts.length)} of {processedProducts.length}
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                  disabled={currentPage === 1}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50"
+                >
+                  Prev
+                </button>
+                <span className="text-xs text-slate-500 px-2">
+                  Page {currentPage} of {totalPages}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                  disabled={currentPage === totalPages}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
         </div>
           </>
         ) : (
@@ -969,7 +1017,7 @@ export default function AdminDashboard({
                     </div>
                   ) : (
                     <div className="w-32 h-40 rounded-xl border-2 border-dashed border-slate-200 flex flex-col justify-center items-center text-[10px] text-slate-400 font-semibold bg-slate-50 select-none">
-                      <Image className="w-6 h-6 text-slate-350 mb-1" />
+                      <ImageIcon className="w-6 h-6 text-slate-350 mb-1" />
                       <span>No Photo Uploaded</span>
                     </div>
                   )}
