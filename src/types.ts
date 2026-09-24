@@ -14,6 +14,8 @@ export interface Product {
   occasions?: string[];
   shapes?: string[];
   inStock?: boolean;
+  quantity?: number;
+  season?: string;
 }
 
 export interface UserProfile {
