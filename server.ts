@@ -56,6 +56,8 @@ function toFrontendProduct(item: any) {
     price: item.price,
     image: item.image || "",
     inStock: item.inStock !== false,
+    quantity: item.quantity,
+    season: item.season || "",
   };
 }
 
@@ -377,10 +379,13 @@ app.post("/api/upload-image", async (req: Request, res: Response) => {
 });
 
 app.post("/api/products", async (req: Request, res: Response) => {
-  const newItem = {
+  const newItem: any = {
     id: `prod-${Date.now()}`,
     ...req.body,
   };
+  if (typeof newItem.quantity === "number") {
+    newItem.inStock = newItem.quantity > 0;
+  }
   try {
     await ddb.send(new PutCommand({ TableName: PRODUCTS_TABLE, Item: newItem }));
     dbProducts.push(toFrontendProduct(newItem));
@@ -397,7 +402,10 @@ app.put("/api/products/:id", async (req: Request, res: Response) => {
   if (idx === -1) {
     return res.status(404).json({ error: "Product not found" });
   }
-  const updated = { ...dbProducts[idx], ...req.body, id };
+  const updated: any = { ...dbProducts[idx], ...req.body, id };
+  if (typeof updated.quantity === "number") {
+    updated.inStock = updated.quantity > 0;
+  }
   try {
     await ddb.send(new PutCommand({ TableName: PRODUCTS_TABLE, Item: updated }));
     dbProducts[idx] = toFrontendProduct(updated);
@@ -421,6 +429,37 @@ app.delete("/api/products/:id", async (req: Request, res: Response) => {
   } catch (err) {
     console.error("[DynamoDB] Failed to delete product:", err);
     res.status(500).json({ error: "Failed to delete product from database" });
+  }
+});
+
+app.post("/api/products/:id/decrement-stock", async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const amount = Number(req.body?.amount) || 1;
+  const idx = dbProducts.findIndex((p) => p.id === id);
+
+  if (idx === -1 || typeof dbProducts[idx].quantity !== "number") {
+    return res.json({ skipped: true });
+  }
+
+  try {
+    const result: any = await ddb.send(
+      new UpdateCommand({
+        TableName: PRODUCTS_TABLE,
+        Key: { id },
+        UpdateExpression: "SET quantity = quantity - :amt, inStock = (quantity - :amt > :zero)",
+        ConditionExpression: "quantity >= :amt",
+        ExpressionAttributeValues: { ":amt": amount, ":zero": 0 },
+        ReturnValues: "ALL_NEW",
+      })
+    );
+    dbProducts[idx] = toFrontendProduct(result.Attributes);
+    res.json({ success: true, remaining: result.Attributes.quantity });
+  } catch (err: any) {
+    if (err.name === "ConditionalCheckFailedException") {
+      return res.status(409).json({ error: "Not enough stock" });
+    }
+    console.error("[DynamoDB] Failed to decrement stock:", err);
+    res.status(500).json({ error: "Failed to update stock" });
   }
 });
 
