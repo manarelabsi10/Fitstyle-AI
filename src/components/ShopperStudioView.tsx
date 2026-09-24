@@ -3619,6 +3619,19 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
                                 .catch((err) => {
                                   console.warn("Could not save order to AWS, kept in localStorage only:", err);
                                 });
+
+                              // Reduce stock for each purchased item (skipped server-side for
+                              // any product that doesn't have quantity tracking set)
+                              const purchasedItems = Object.values(currentOrderData.outfit || {}).filter(Boolean) as any[];
+                              purchasedItems.forEach((item) => {
+                                if (item?.id) {
+                                  fetch(`/api/products/${item.id}/decrement-stock`, {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ amount: 1 }),
+                                  }).catch((err) => console.warn(`Could not decrement stock for ${item.id}`, err));
+                                }
+                              });
                             } catch (err) {
                               console.error("Setup error for order saving:", err);
                             }

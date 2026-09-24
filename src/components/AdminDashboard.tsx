@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from "react";
 import { 
   Plus, Trash2, Edit3, X, Image as ImageIcon, Tag, DollarSign, 
   PlusCircle, Check, LogOut, Download, AlertTriangle, 
-  Heart, Search, HelpCircle, BarChart3 
+  Heart, Search, BarChart3
 } from "lucide-react";
 import { Product, CategoryType, OccasionType, UserProfile } from "../types";
 import SalesAnalyticsDashboard from "./SalesAnalyticsDashboard";
@@ -62,7 +62,17 @@ export default function AdminDashboard({
   const [name, setName] = useState("");
   const [category, setCategory] = useState<CategoryType>("top");
   const [occasion, setOccasion] = useState<OccasionType>("Casual");
-  const [size, setSize] = useState("M");
+  const [sizes, setSizes] = useState<string[]>(["M"]);
+  const [quantity, setQuantity] = useState<number>(0);
+  const [season, setSeason] = useState<string>("");
+
+  const CLOTHING_SIZES = ["XS", "S", "M", "L", "XL", "XXL"];
+  const SHOE_SIZES = ["36", "37", "38", "39", "40", "41", "42", "43", "44", "45"];
+  const sizeOptionsForCategory = (cat: string) => (cat === "footwear" ? SHOE_SIZES : CLOTHING_SIZES);
+
+  const toggleSize = (s: string) => {
+    setSizes((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]));
+  };
   const [price, setPrice] = useState<number>(120);
   const [image, setImage] = useState("");
   const [colour, setColour] = useState("");
@@ -100,7 +110,7 @@ export default function AdminDashboard({
 
     // Filter by Size
     if (filterSize !== "all") {
-      result = result.filter(p => p.size === filterSize);
+      result = result.filter(p => p.size?.split(",").map(s => s.trim()).includes(filterSize));
     }
 
     // Sort by options
@@ -253,17 +263,22 @@ export default function AdminDashboard({
         }
       }
 
+      const computedInStock = quantity > 0 ? true : (quantity === 0 ? false : inStock);
+      const joinedSizes = sizes.join(", ");
+
       if (editingItem) {
         await Promise.resolve(onUpdateProduct({
           id: editingItem.id,
           name,
           category,
           occasion,
-          size,
+          size: joinedSizes,
           price,
           image: imageUrl,
           colour,
-          inStock,
+          inStock: computedInStock,
+          quantity,
+          season,
           occasions: editingItem.occasions || [occasion],
           shapes: editingItem.shapes || ["Hourglass", "Pear", "Apple", "Rectangle", "Inverted Triangle"]
         }));
@@ -275,11 +290,13 @@ export default function AdminDashboard({
           name,
           category,
           occasion,
-          size,
+          size: joinedSizes,
           price,
           image: imageUrl,
           colour,
-          inStock
+          inStock: computedInStock,
+          quantity,
+          season
         }));
         showToast("✓ Product added to catalog");
       }
@@ -287,7 +304,9 @@ export default function AdminDashboard({
       setName("");
       setCategory("top");
       setOccasion("Casual");
-      setSize("M");
+      setSizes(["M"]);
+      setQuantity(0);
+      setSeason("");
       setPrice(120);
       setImage("");
       setPreviewImage(null);
@@ -327,7 +346,9 @@ export default function AdminDashboard({
     setName(item.name);
     setCategory(item.category);
     setOccasion(item.occasion);
-    setSize(item.size);
+    setSizes(item.size ? item.size.split(",").map(s => s.trim()).filter(Boolean) : ["M"]);
+    setQuantity(typeof item.quantity === "number" ? item.quantity : 0);
+    setSeason(item.season || "");
     setPrice(item.price);
     setImage(item.image);
     setColour(item.colour);
@@ -346,7 +367,9 @@ export default function AdminDashboard({
     setName("");
     setCategory("top");
     setOccasion("Casual");
-    setSize("M");
+    setSizes(["M"]);
+    setQuantity(0);
+    setSeason("");
     setPrice(120);
     setImage("");
     setColour("");
@@ -544,7 +567,7 @@ export default function AdminDashboard({
               className="bg-slate-50 border border-slate-200 px-3.5 py-2.5 rounded-xl text-xs font-semibold text-slate-700 outline-none focus:border-[#5a005a] transition-all"
             >
               <option value="all">Categories: All</option>
-              <option value="top">Tops & Outerwear</option>
+              <option value="top">Tops, Dresses & Outerwear</option>
               <option value="bottom">Bottoms & Skirts</option>
               <option value="footwear">Footwear</option>
               <option value="accessories">Accessories</option>
@@ -634,6 +657,8 @@ export default function AdminDashboard({
                   <th className="py-4 px-4">Category</th>
                   <th className="py-4 px-4">Occasion Target</th>
                   <th className="py-4 px-4">Tag Size</th>
+                  <th className="py-4 px-4 text-center">Quantity</th>
+                  <th className="py-4 px-4 text-center">Season</th>
                   <th className="py-4 px-4 text-center">Stock Status</th>
                   <th className="py-4 px-4 text-right">Price</th>
                   <th className="py-4 px-6 text-center">Manage</th>
@@ -642,7 +667,7 @@ export default function AdminDashboard({
               <tbody className="divide-y divide-slate-100 text-sm">
                 {processedProducts.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="py-12 text-center text-slate-400 font-light">
+                    <td colSpan={10} className="py-12 text-center text-slate-400 font-light">
                       No items matching your filter options. Click &apos;Add Garment&apos; to register new items.
                     </td>
                   </tr>
@@ -694,6 +719,14 @@ export default function AdminDashboard({
                       </td>
 
                       <td className="py-4 px-4 font-outfit text-slate-700 font-bold">{item.size}</td>
+
+                      <td className="py-4 px-4 text-center font-outfit text-slate-700 font-bold">
+                        {typeof item.quantity === "number" ? item.quantity : "—"}
+                      </td>
+
+                      <td className="py-4 px-4 text-center font-outfit text-slate-500">
+                        {item.season || "—"}
+                      </td>
 
                       {/* Stock Status Toggle switch on each product */}
                       <td className="py-4 px-4 text-center">
@@ -849,7 +882,7 @@ export default function AdminDashboard({
                     onChange={(e) => setCategory(e.target.value as CategoryType)}
                     className="w-full bg-[#f8fafc] px-4 py-3 rounded-xl border border-slate-200 focus:border-[#5a005a] outline-none text-sm font-semibold text-slate-700"
                   >
-                    <option value="top">Top / Outerwear</option>
+                    <option value="top">Top / Dress / Outerwear</option>
                     <option value="bottom">Bottom / Skirt / Trouser</option>
                     <option value="footwear">Footwear</option>
                     <option value="accessories">Accessories</option>
@@ -876,22 +909,30 @@ export default function AdminDashboard({
               </div>
 
               <div className="grid grid-cols-2 gap-4">
-                {/* Fit Size */}
+                {/* Available Sizes */}
                 <div>
                   <label className="block text-[10px] font-outfit uppercase tracking-wider text-slate-500 font-bold mb-1.5">
-                    Standard Fit Size
+                    Available Sizes {category === "footwear" ? "(Shoe sizes, EU)" : "(Clothing sizes)"}
                   </label>
-                  <select
-                    value={size}
-                    onChange={(e) => setSize(e.target.value)}
-                    className="w-full bg-[#f8fafc] px-4 py-3 rounded-xl border border-slate-200 focus:border-[#5a005a] outline-none text-sm font-semibold text-slate-700"
-                  >
-                    <option value="S">S (Small)</option>
-                    <option value="M">M (Medium)</option>
-                    <option value="L">L (Large)</option>
-                    <option value="XL">XL (Extra Large)</option>
-                    <option value="OS">OS (One Size Fits All)</option>
-                  </select>
+                  <div className="flex flex-wrap gap-1.5 bg-[#f8fafc] p-2.5 rounded-xl border border-slate-200">
+                    {sizeOptionsForCategory(category).map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => toggleSize(s)}
+                        className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition-all ${
+                          sizes.includes(s)
+                            ? "bg-[#5a005a] text-white border-[#5a005a]"
+                            : "bg-white text-slate-600 border-slate-200 hover:border-[#5a005a]/40"
+                        }`}
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                  {sizes.length === 0 && (
+                    <p className="text-[10px] text-red-500 mt-1">Select at least one size.</p>
+                  )}
                 </div>
 
                 {/* Colour swatch */}
@@ -930,19 +971,58 @@ export default function AdminDashboard({
                   </div>
                 </div>
 
+                {/* Quantity -- when set, this drives Stock Status automatically */}
+                <div>
+                  <label className="block text-[10px] font-outfit uppercase tracking-wider text-slate-500 font-bold mb-1.5">
+                    Quantity in Stock
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    placeholder="0"
+                    value={quantity}
+                    onChange={(e) => setQuantity(Math.max(0, Number(e.target.value)))}
+                    className="w-full bg-[#f8fafc] px-4 py-3 rounded-xl border border-slate-200 focus:border-[#5a005a] outline-none text-sm font-medium"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Reaching 0 automatically marks the product Out of Stock.
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-outfit uppercase tracking-wider text-slate-500 font-bold mb-1.5">
+                    Season
+                  </label>
+                  <select
+                    value={season}
+                    onChange={(e) => setSeason(e.target.value)}
+                    className="w-full bg-[#f8fafc] px-4 py-3 rounded-xl border border-slate-200 focus:border-[#5a005a] outline-none text-sm font-medium"
+                  >
+                    <option value="">Not set</option>
+                    <option value="Summer">Summer</option>
+                    <option value="Winter">Winter</option>
+                    <option value="Fall">Fall</option>
+                    <option value="Spring">Spring</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
                 {/* Initial stock state toggler of drawer */}
                 <div>
                   <label className="block text-[10px] font-outfit uppercase tracking-wider text-slate-500 font-bold mb-3">
-                    Initial Stock Status
+                    Stock Status
                   </label>
                   <label className="flex items-center gap-2.5 cursor-pointer select-none">
                     <input
                       type="checkbox"
-                      checked={inStock}
+                      checked={quantity > 0 ? true : inStock}
+                      disabled={quantity === 0}
                       onChange={(e) => setInStock(e.target.checked)}
-                      className="rounded border-slate-300 text-[#5a005a] focus:ring-[#5a005a] w-4.5 h-4.5 cursor-pointer"
+                      className="rounded border-slate-300 text-[#5a005a] focus:ring-[#5a005a] w-4.5 h-4.5 cursor-pointer disabled:opacity-50"
                     />
-                    <span className="text-xs text-slate-600 font-semibold">Available for recommendations</span>
+                    <span className="text-xs text-slate-600 font-semibold">
+                      {quantity === 0 ? "Out of Stock (quantity is 0)" : "Available for recommendations"}
+                    </span>
                   </label>
                 </div>
               </div>
@@ -1021,44 +1101,6 @@ export default function AdminDashboard({
                       <span>No Photo Uploaded</span>
                     </div>
                   )}
-                </div>
-              </div>
-
-              {/* URL Quick Presets - helpful for sandbox fallback */}
-              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-150">
-                <p className="text-[9px] font-outfit uppercase tracking-widest text-[#a1909e] mb-2 font-extrabold flex items-center gap-1">
-                  <HelpCircle className="w-3.5 h-3.5" />
-                  Or Select standard sandbox model presets
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setImage("https://images.unsplash.com/photo-1595777457583-95e059d581b8?auto=format&fit=crop&q=80&w=600")}
-                    className="text-[9px] bg-white hover:bg-[#5a005a]/5 hover:text-[#5a005a] hover:border-[#5a005a]/30 p-1.5 px-2.5 rounded-lg border border-slate-200 font-mono transition-all cursor-pointer font-bold uppercase tracking-wider"
-                  >
-                    Gown Style
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setImage("https://images.unsplash.com/photo-1583391733956-3750e0ff4e8b?auto=format&fit=crop&q=80&w=600")}
-                    className="text-[9px] bg-white hover:bg-[#5a005a]/5 hover:text-[#5a005a] hover:border-[#5a005a]/30 p-1.5 px-2.5 rounded-lg border border-slate-200 font-mono transition-all cursor-pointer font-bold uppercase tracking-wider"
-                  >
-                    Pleat Skirt
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setImage("https://images.unsplash.com/photo-1548624313-0396c75e4b1a?auto=format&fit=crop&q=80&w=600")}
-                    className="text-[9px] bg-white hover:bg-[#5a005a]/5 hover:text-[#5a005a] hover:border-[#5a005a]/30 p-1.5 px-2.5 rounded-lg border border-slate-200 font-mono transition-all cursor-pointer font-bold uppercase tracking-wider"
-                  >
-                    Satin Blazer
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setImage("https://images.unsplash.com/photo-1533867617858-e7b97e060509?auto=format&fit=crop&q=80&w=600")}
-                    className="text-[9px] bg-white hover:bg-[#5a005a]/5 hover:text-[#5a005a] hover:border-[#5a005a]/30 p-1.5 px-2.5 rounded-lg border border-slate-200 font-mono transition-all cursor-pointer font-bold uppercase tracking-wider"
-                  >
-                    Loafers Shoes
-                  </button>
                 </div>
               </div>
 
