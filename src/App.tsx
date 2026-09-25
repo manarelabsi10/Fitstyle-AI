@@ -3,10 +3,19 @@ import LoginView from "./components/LoginView";
 import ShopperStudioView from "./components/ShopperStudioView";
 import AdminDashboard from "./components/AdminDashboard";
 import LandingPage from "./components/LandingPage";
+import { CartItem } from "./components/ProductCartPage";
 import { Product, UserProfile } from "./types";
 import { getCurrentUser, signOut, fetchUserAttributes, deleteUser } from "aws-amplify/auth";
 import "./amplifyConfig";
 import { STATIC_FALLBACK_PRODUCTS } from "./data/fallbackProducts";
+
+const createInitialCart = (catalog: Product[]): CartItem[] => {
+  return catalog.slice(0, 3).map((product, index) => ({
+    product,
+    quantity: 1,
+    badge: index === 0 ? "AI Choice" : undefined
+  }));
+};
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
@@ -15,10 +24,12 @@ export default function App() {
   const [showAuth, setShowAuth] = useState(false);
 
   // Custom navigation views
-  const [currentView, setCurrentView] = useState<"home" | "trending" | "my-looks" | "wardrobe" | "fitting-studio">("home");
-  const [authRedirectTarget, setAuthRedirectTarget] = useState<"home" | "trending" | "my-looks" | "wardrobe" | "fitting-studio" | null>(null);
+  const [currentView, setCurrentView] = useState<"home" | "my-looks" | "cart" | "fitting-studio">("home");
+  const [authRedirectTarget, setAuthRedirectTarget] = useState<"home" | "my-looks" | "fitting-studio" | null>(null);
   const [authMessage, setAuthMessage] = useState<string>("");
   const [initialOutfit, setInitialOutfit] = useState<any>(null);
+  const [studioInitialStep, setStudioInitialStep] = useState(1);
+  const [cartItems, setCartItems] = useState<CartItem[]>(() => createInitialCart(STATIC_FALLBACK_PRODUCTS));
 
   // Initialize and load user profile + products
   useEffect(() => {
@@ -125,6 +136,7 @@ export default function App() {
     setShowAuth(false);
     setCurrentView("home");
     setInitialOutfit(null);
+    setStudioInitialStep(1);
     localStorage.removeItem("active_user_session_fitstyle");
   };
 
@@ -149,6 +161,7 @@ export default function App() {
     setShowAuth(false);
     setCurrentView("home");
     setInitialOutfit(null);
+    setStudioInitialStep(1);
     localStorage.removeItem("active_user_session_fitstyle");
   };
 
@@ -201,6 +214,18 @@ export default function App() {
       console.warn("Delete product API call failed - removing from client memory only (won't persist)", err);
       setProducts((prev) => prev.filter((p) => p.id !== id));
     }
+  };
+
+  const updateCartQuantity = (productId: string, quantity: number) => {
+    setCartItems((items) => items.map((item) => (
+      item.product.id === productId
+        ? { ...item, quantity: Math.max(1, quantity) }
+        : item
+    )));
+  };
+
+  const removeCartItem = (productId: string) => {
+    setCartItems((items) => items.filter((item) => item.product.id !== productId));
   };
 
   if (!appReady) {
@@ -263,7 +288,9 @@ export default function App() {
         onBackToPortal={() => {
           setCurrentView("home");
           setInitialOutfit(null);
+          setStudioInitialStep(1);
         }}
+        initialStep={studioInitialStep}
         initialOutfit={initialOutfit}
         onAddProduct={handleAddProduct}
         onDeleteProduct={handleDeleteProduct}
@@ -273,7 +300,7 @@ export default function App() {
   }
 
   // Default / All sub-views under the Landing Page wrapper:
-  // Support Guest states & Logged-In Shopper Home pages (Home, Trending, My Looks, Wardrobe)
+  // Support Guest states & Logged-In Shopper Home pages (Home, My Looks, Wardrobe)
   return (
     <LandingPage 
       products={products.filter((p) => p.inStock !== false)}
@@ -282,6 +309,20 @@ export default function App() {
       onDeleteAccount={handleDeleteAccount}
       activeView={currentView === "fitting-studio" ? "home" : currentView}
       setActiveView={setCurrentView}
+      cartItems={cartItems}
+      onOpenCart={() => setCurrentView("cart")}
+      onProceedToPayment={() => {
+        setStudioInitialStep(5);
+        if (currentUser) {
+          setCurrentView("fitting-studio");
+        } else {
+          setAuthMessage("Sign in to continue to secure payment.");
+          setAuthRedirectTarget("fitting-studio");
+          setShowAuth(true);
+        }
+      }}
+      onUpdateCartQuantity={updateCartQuantity}
+      onRemoveCartItem={removeCartItem}
       onSignIn={(message, redirectTarget) => {
         setAuthMessage(message || "");
         setAuthRedirectTarget((redirectTarget as any) || "home");
@@ -293,6 +334,7 @@ export default function App() {
         setShowAuth(true);
       }}
       onEnterFittingStudio={() => {
+        setStudioInitialStep(1);
         setCurrentView("fitting-studio");
       }}
       setInitialOutfit={setInitialOutfit}
