@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Upload, Sparkles, RefreshCw, Layers, ArrowRight, CheckCircle2, ChevronRight, Award, HelpCircle, FileText, ArrowLeftRight, HelpCircle as HelpIcon, LogOut, X, AlertTriangle, AlertCircle, Info, Calendar, MapPin, Phone, Clock, CreditCard, ArrowLeft, Check, ShoppingBag, Download, Home, User, Search, Trash2, Heart } from "lucide-react";
+import { Upload, Sparkles, RefreshCw, Layers, ArrowRight, CheckCircle2, ChevronRight, Award, HelpCircle, FileText, ArrowLeftRight, HelpCircle as HelpIcon, LogOut, X, AlertTriangle, AlertCircle, Info, Calendar, MapPin, Phone, Clock, CreditCard, ArrowLeft, Check, ShoppingBag, Download, Home, User, Search, Trash2, Heart, Ruler, Pencil, Minus, Plus, RotateCcw, Edit3 } from "lucide-react";
 import { Product, BodyShapeType, SizingRecommendation, UserProfile } from "../types";
 import { jsPDF } from "jspdf";
 import ReactMarkdown from "react-markdown";
@@ -124,6 +124,7 @@ interface ShopperStudioViewProps {
   onDeleteAccount?: () => void;
   onLogin?: (user: UserProfile) => void;
   onBackToPortal?: () => void;
+  initialStep?: number;
   initialOutfit?: any;
   onAddProduct?: (newProd: Omit<Product, "id"> & { id?: string }) => Promise<void> | void;
   onDeleteProduct?: (id: string) => Promise<void> | void;
@@ -681,7 +682,7 @@ function CatalogModal({
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function ShopperStudioView({ products, currentUser, onLogout, onDeleteAccount, onLogin, onBackToPortal, initialOutfit, onAddProduct, onDeleteProduct }: ShopperStudioViewProps) {
+export default function ShopperStudioView({ products, currentUser, onLogout, onDeleteAccount, onLogin, onBackToPortal, initialOutfit, onAddProduct, onDeleteProduct, initialStep }: ShopperStudioViewProps) {
   // Main express checkout states
   const [connectedPayment, setConnectedPayment] = useState<"google" | "apple" | null>(null);
   const [googleAccountInfo, setGoogleAccountInfo] = useState<{ name: string; email: string } | null>(null);
@@ -700,7 +701,7 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
   const lastAnalyzedPhotoRef = useRef<string | null>(null);
   const lastAnalyzedOccasionRef = useRef<string | null>(null);
   const isAnalyzingRef = useRef<boolean>(false);
-  const [currentStep, setCurrentStep] = useState<number>(1);
+  const [currentStep, setCurrentStep] = useState<number>(initialStep ?? 1);
   const [paymentProcessing, setPaymentProcessing] = useState<boolean>(false);
   const [isGeneratingPDF, setIsGeneratingPDF] = useState<boolean>(false);
   const [paymentLogs, setPaymentLogs] = useState<string[]>([]);
@@ -934,6 +935,7 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
   }, [currentStep, currentUser]);
   const [activePreset, setActivePreset] = useState<string>("preset-1");
   const [trialLoading, setTrialLoading] = useState(false);
+  const [lookGenerating, setLookGenerating] = useState(false);
   const [isPoseMode, setIsPoseMode] = useState(true);
 
   // Gemma Pose Detection & Confidence
@@ -1138,6 +1140,8 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
   const [shoulderSize, setShoulderSize] = useState<number>(34);
   const [waistSize, setWaistSize] = useState<number>(26);
   const [hipSize, setHipSize] = useState<number>(35);
+  const [selectedSize, setSelectedSize] = useState<string>("M");
+  const calibratedMeasurementsRef = useRef({ heightCm: 172, shoulderSize: 34, waistSize: 26, hipSize: 35 });
 
   const [classifyDetails, setClassifyDetails] = useState<{
     shape: BodyShapeType;
@@ -1543,10 +1547,17 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
         description: "AI Calibrated Fitting Alignment",
         numericSize: validated.suggested_size || "8-10"
       });
+      setSelectedSize(validated.suggested_size || "M");
 
       // Height logic from Qwen estimated and validated values
       setHeightCm(validated.height_cm);
       setWeightKg(validated.weight_kg);
+      calibratedMeasurementsRef.current = {
+        heightCm: validated.height_cm,
+        shoulderSize,
+        waistSize,
+        hipSize
+      };
 
       if (validated.confidence?.toLowerCase() === "low" || isLooseClothing) {
         const confidence = Math.min(95, 60 + ((shoulderSize + waistSize + hipSize) / 3));
@@ -3185,6 +3196,55 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
   };
 
   const renderStep3 = () => {
+    const selectedItems = [selectedOutfit.top, selectedOutfit.bottom, selectedOutfit.footwear, selectedOutfit.accessories].filter((item): item is Product => Boolean(item));
+    const selectedTotal = selectedItems.reduce((total, item) => total + item.price, 0);
+    const collectionItems = products.filter((product) => product.inStock !== false).slice(0, 6);
+    const previewImage = tryOnUrl || selectedPhoto || selectedItems[0]?.image;
+    const removeItem = (productId: string) => {
+      setSelectedOutfit((previous) => ({
+        top: previous.top?.id === productId ? null : previous.top,
+        bottom: previous.bottom?.id === productId ? null : previous.bottom,
+        footwear: previous.footwear?.id === productId ? null : previous.footwear,
+        accessories: previous.accessories?.id === productId ? null : previous.accessories
+      }));
+    };
+    const generateLook = () => {
+      setLookGenerating(true);
+      window.setTimeout(() => setLookGenerating(false), 1400);
+    };
+
+    return (
+      <main className="flex-grow bg-[#fbf8fb] px-4 py-6 md:px-8 md:py-8" id="step-3-container">
+        <div className="mx-auto max-w-[1440px]">
+          <div className="mb-6 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+            <div>
+              <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#ac2471]">AI-Powered Styling Workspace</span>
+              <h2 className="mt-2 font-playfair text-3xl font-bold leading-none text-[#1d1327] md:text-4xl">Virtual Try-On</h2>
+              <p className="mt-2 text-xs text-slate-500">See your curated pieces together before creating your order.</p>
+            </div>
+            <button type="button" onClick={() => setCurrentStep(2)} className="inline-flex items-center gap-2 self-start rounded-xl border border-[#ecddec] bg-white px-4 py-2.5 text-[10px] font-extrabold uppercase tracking-wider text-[#5a005a] hover:bg-[#fbf6fb] md:self-auto"><ArrowLeft className="h-3.5 w-3.5" /> Back to Sizing</button>
+          </div>
+
+          <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(220px,1fr)_minmax(440px,2fr)_minmax(260px,1fr)]">
+            <section className="flex min-h-[620px] flex-col rounded-3xl border border-[#ecddec] bg-white p-4 shadow-sm md:p-5">
+              <div className="border-b border-[#f1e8f2] pb-4"><h3 className="font-playfair text-2xl font-bold text-[#1d1327]">Collections</h3><p className="mt-1 text-[9px] font-extrabold uppercase tracking-[0.18em] text-[#ac2471]">Curated for your style DNA</p></div>
+              <div className="mt-4 flex-1 space-y-4 overflow-y-auto pr-1">
+                <div><div className="mb-2 flex items-center justify-between text-[9px] font-extrabold uppercase tracking-wider text-slate-400"><span>Dresses</span><span>12 items</span></div><div className="space-y-2">{collectionItems.filter((item) => item.category === "top").slice(0, 3).map((item) => <button type="button" key={item.id} onClick={() => setSelectedOutfit((previous) => ({ ...previous, top: item }))} className={`flex w-full gap-3 rounded-xl border p-2 text-left transition ${selectedOutfit.top?.id === item.id ? "border-[#5a005a] bg-[#fbf5fa] ring-1 ring-[#5a005a]/10" : "border-[#f1e8f2] hover:border-[#d9b9d9]"}`}><img src={item.image} alt={item.name} className="h-16 w-12 rounded-lg object-cover" /><span className="min-w-0 flex-1"><strong className="block truncate text-[11px] text-[#1d1327]">{item.name}</strong><span className="mt-1 block text-[10px] text-slate-500">${item.price}</span><span className="mt-1 block text-[8px] font-bold uppercase tracking-wider text-[#ac2471]">{selectedOutfit.top?.id === item.id ? "AI Choice" : item.size}</span></span></button>)}</div></div>
+                <div><div className="mb-2 flex items-center justify-between text-[9px] font-extrabold uppercase tracking-wider text-slate-400"><span>Tops</span><span>24 items</span></div><div className="space-y-2">{collectionItems.filter((item) => item.category === "top").slice(3, 5).map((item) => <button type="button" key={item.id} onClick={() => setSelectedOutfit((previous) => ({ ...previous, top: item }))} className="flex w-full gap-3 rounded-xl border border-[#f1e8f2] p-2 text-left transition hover:border-[#d9b9d9]"><img src={item.image} alt={item.name} className="h-16 w-12 rounded-lg object-cover" /><span className="min-w-0 flex-1"><strong className="block truncate text-[11px] text-[#1d1327]">{item.name}</strong><span className="mt-1 block text-[10px] text-slate-500">${item.price}</span><span className="mt-1 block text-[8px] text-slate-400">{item.size}</span></span></button>)}</div></div>
+              </div>
+              <button type="button" onClick={generateLook} disabled={lookGenerating} className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-[#580a58] px-4 py-3 text-[10px] font-extrabold uppercase tracking-wider text-white shadow-sm transition hover:bg-[#450645] disabled:cursor-wait disabled:opacity-70">{lookGenerating ? <><RefreshCw className="h-3.5 w-3.5 animate-spin" /> Rendering Look...</> : <><Sparkles className="h-3.5 w-3.5" /> Generate Look</>}</button>
+            </section>
+
+            <section className="rounded-3xl border border-[#ecddec] bg-white p-4 shadow-sm md:p-5"><div className="relative overflow-hidden rounded-2xl bg-[#e9e2e9] shadow-inner"><div className="aspect-[4/5] min-h-[520px] md:min-h-[620px]">{previewImage ? <img src={previewImage} alt="Virtual try-on preview" className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center text-center text-xs text-slate-500">Upload a photo in Step 1 to preview your look.</div>}</div><div className="absolute left-4 top-4 inline-flex items-center gap-2 rounded-full border border-white/50 bg-white/85 px-3 py-1.5 text-[9px] font-bold text-[#1d1327] shadow-sm backdrop-blur"><span className="h-2 w-2 rounded-full bg-emerald-500" /> Virtual Fitting Active</div><span className="absolute bottom-4 right-4 rounded-md bg-black/60 px-2.5 py-1.5 text-[8px] font-bold tracking-[0.16em] text-white">RENDER: 4K PHOTONIC</span><div className="pointer-events-none absolute left-1/2 top-1/2 h-16 w-16 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/70"><span className="absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white" /></div></div><p className="mt-4 text-center font-playfair text-xl italic text-[#580a58]">Effortless <span className="not-italic text-[#d2a5c9]">•</span> Intelligent <span className="not-italic text-[#d2a5c9]">•</span> Serene</p></section>
+
+            <section className="flex flex-col rounded-3xl border border-[#ecddec] bg-white p-5 shadow-sm md:p-6"><div className="border-b border-[#f1e8f2] pb-4"><h3 className="font-playfair text-2xl font-bold text-[#1d1327]">Your Selection</h3><p className="mt-2 text-[10px] font-extrabold uppercase tracking-wider text-[#ac2471]">✦ AI Style Harmony: 98%</p></div><div className="mt-2 flex-1 divide-y divide-[#f1e8f2]">{selectedItems.length === 0 ? <p className="py-8 text-center text-xs text-slate-400">No pieces selected yet.</p> : selectedItems.map((item) => <div key={item.id} className="flex items-center gap-3 py-4"><img src={item.image} alt={item.name} className="h-14 w-12 rounded-lg object-cover" /><div className="min-w-0 flex-1"><p className="truncate text-[11px] font-bold text-[#1d1327]">{item.name}</p><p className="mt-1 text-[10px] text-slate-500">Size: {item.size}</p><p className="mt-1 font-serif text-sm font-bold text-[#580a58]">${item.price.toFixed(2)}</p></div><button type="button" aria-label={`Remove ${item.name}`} onClick={() => removeItem(item.id)} className="rounded-full p-1 text-slate-400 hover:bg-red-50 hover:text-red-600"><span className="text-lg leading-none">×</span></button></div>)}</div><div className="mt-4 border-t border-[#f1e8f2] pt-4 text-xs text-slate-500"><div className="flex justify-between"><span>Items ({selectedItems.length})</span><span>${selectedTotal.toFixed(2)}</span></div><div className="mt-2 flex justify-between"><span>AI Styling Fee</span><span className="font-bold text-emerald-600">FREE</span></div><div className="my-4 border-t border-[#f1e8f2]" /><div className="flex items-end justify-between"><span className="font-bold uppercase tracking-wider text-[#1d1327]">Total</span><span className="font-playfair text-2xl font-bold text-[#580a58]">${selectedTotal.toFixed(2)}</span></div><button type="button" onClick={() => setCurrentStep(4)} disabled={selectedItems.length === 0} className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-[#580a58] px-4 py-3.5 text-[10px] font-extrabold uppercase tracking-wider text-white shadow-sm transition hover:bg-[#450645] disabled:cursor-not-allowed disabled:opacity-40">Continue to Create Order <ArrowRight className="h-4 w-4" /></button></div></section>
+          </div>
+        </div>
+      </main>
+    );
+  };
+
+  const renderCreateOrder = () => {
     return (
       <main className="flex-grow p-6 md:p-10 max-w-7xl mx-auto w-full flex flex-col justify-center items-center animate-fade-in" id="step-3-container">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 w-full max-w-6xl">
@@ -3275,7 +3335,7 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
             <div className="mt-8 pt-4 border-t border-slate-100 flex justify-between items-center font-sans">
               <button
                 type="button"
-                onClick={() => setCurrentStep(2)}
+                onClick={() => setCurrentStep(3)}
                 className="px-5 py-2.5 border border-[#faeef5] text-slate-600 rounded-xl text-xs font-semibold hover:bg-slate-50 cursor-pointer"
               >
                 ← Back to Studio Fit
@@ -3291,7 +3351,7 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
                 </button>
                 <button
                   type="button"
-                  onClick={() => setCurrentStep(4)}
+                  onClick={() => setCurrentStep(5)}
                   className="bg-[#ac2471] hover:bg-[#8f195b] text-white py-2.5 px-6 rounded-xl font-outfit text-xs font-bold uppercase tracking-wider shadow flex items-center gap-1.5 active:scale-95 cursor-pointer animate-pulse"
                 >
                   <span>Proceed to Payment portal</span>
@@ -3305,7 +3365,7 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
     );
   };
 
-  const renderStep4 = () => {
+  const renderPayment = () => {
     const totalAmount = [selectedOutfit.top, selectedOutfit.bottom, selectedOutfit.footwear, selectedOutfit.accessories]
       .reduce((acc, p) => acc + (p ? p.price : 0), 0) || 485;
 
@@ -3522,7 +3582,7 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
             <div className="mt-8 pt-4 border-t border-slate-100 flex justify-between items-center">
               <button
                 type="button"
-                onClick={() => { if (!paymentProcessing) setCurrentStep(3); }}
+                onClick={() => { if (!paymentProcessing) setCurrentStep(4); }}
                 disabled={paymentProcessing}
                 className="px-5 py-2.5 border border-[#faeef5] text-slate-600 rounded-xl text-xs font-semibold hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
               >
@@ -3638,7 +3698,7 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
                           }
 
                           setPaymentProcessing(false);
-                          setCurrentStep(5);
+                          setCurrentStep(6);
                         }, 500);
                       }, 500);
                     }, 500);
@@ -3843,7 +3903,7 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
     }
   };
 
-  const renderStep5 = () => {
+  const renderReceipt = () => {
     const totalAmount = [selectedOutfit.top, selectedOutfit.bottom, selectedOutfit.footwear, selectedOutfit.accessories]
       .reduce((acc, p) => acc + (p ? p.price : 0), 0) || 485;
 
@@ -4290,6 +4350,85 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
     );
   };
 
+  const renderStep2 = () => {
+    const measurementCards = [
+      { label: "Shopper Height", value: heightCm, unit: "CM", icon: "height", setValue: setHeightCm, min: 120 },
+      { label: "Shoulders", value: shoulderSize, unit: "IN", icon: "straighten", setValue: setShoulderSize, min: 1 },
+      { label: "Natural Waist", value: waistSize, unit: "IN", icon: "accessibility_new", setValue: setWaistSize, min: 1 },
+      { label: "Hips", value: hipSize, unit: "IN", icon: "straighten", setValue: setHipSize, min: 1 }
+    ];
+    const recommendedSize = validationResult?.suggested_size || sizeRecommendation.recommendedSize || "M";
+    const saveAdjustments = async () => {
+      const profileData = {
+        heightCm,
+        weightKg,
+        shoulderSize,
+        waistSize,
+        hipSize,
+        selectedPhoto,
+        classifyDetails,
+        sizeRecommendation: { ...sizeRecommendation, recommendedSize: selectedSize },
+        updatedAt: new Date().toISOString()
+      };
+
+      if (currentUser?.uid) {
+        localStorage.setItem(`bodyProfile_${currentUser.uid}`, JSON.stringify(profileData));
+        try {
+          await fetch(`/api/measurements/${currentUser.uid}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(profileData)
+          });
+        } catch (error) {
+          console.warn("Could not persist manual measurements to AWS; local copy saved.", error);
+        }
+      }
+      calibratedMeasurementsRef.current = { heightCm, shoulderSize, waistSize, hipSize };
+    };
+
+    const resetAdjustments = () => {
+      const calibrated = calibratedMeasurementsRef.current;
+      setHeightCm(calibrated.heightCm);
+      setShoulderSize(calibrated.shoulderSize);
+      setWaistSize(calibrated.waistSize);
+      setHipSize(calibrated.hipSize);
+    };
+
+    return (
+      <main className="flex-grow bg-[#FAF8FB] px-4 py-6 md:px-8 md:py-8" id="step-2-container">
+        <div className="max-w-7xl mx-auto">
+          <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-6">
+            <div>
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-[#ECDDEC] bg-[#FBF6FB] px-3 py-1 text-[9px] font-extrabold uppercase tracking-[0.16em] text-[#5B085A]"><Sparkles className="h-3 w-3" /> AI Computer Vision Calibration</span>
+              <h1 className="mt-3 font-playfair text-3xl md:text-4xl font-bold leading-none text-[#1A1528]">Confirm Your Measurements</h1>
+              <p className="mt-2 max-w-xl text-xs leading-relaxed text-slate-500">Review the measurements detected from your uploaded photo before continuing to personalized look curation.</p>
+            </div>
+            <div className="inline-flex items-center gap-2 self-start rounded-full border border-emerald-200 bg-white px-3.5 py-2 text-[10px] font-bold text-emerald-700 shadow-sm md:self-auto"><span className="h-2 w-2 rounded-full bg-emerald-500" /> Calibration Verified ({Math.round(poseConfidence)}% confidence)</div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
+            <section className="lg:col-span-7 rounded-3xl border border-[#ECDDEC] bg-white p-5 shadow-[0_12px_30px_rgba(91,8,90,0.05)] md:p-6">
+              <div className="flex flex-col gap-4 border-b border-[#f1e8f2] pb-4 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex items-start gap-3"><div className="rounded-xl bg-[#FBF6FB] p-2.5 text-[#5B085A]"><Ruler className="h-5 w-5" /></div><div><div className="flex flex-wrap items-center gap-2"><h2 className="font-playfair text-xl font-bold text-[#1A1528]">Extracted Body Metrics</h2><span className="rounded-full border border-[#ECDDEC] bg-[#FBF6FB] px-2 py-0.5 text-[8px] font-extrabold uppercase tracking-wider text-[#5B085A]">Editable</span></div><p className="mt-1 text-[11px] text-slate-500">Auto-calibrated against optical plane or fine-tune manually</p></div></div>
+                <div className="flex items-center gap-2 self-end sm:self-auto"><button type="button" onClick={() => setIsPoseMode(true)} className="rounded-full border border-[#ECDDEC] bg-[#FBF6FB] px-3 py-1.5 text-[9px] font-extrabold uppercase tracking-wider text-[#5B085A]">Manual Mode</button><button type="button" onClick={resetAdjustments} className="inline-flex items-center gap-1 rounded-full border border-[#e9e3eb] bg-white px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider text-slate-500 hover:border-[#5B085A] hover:text-[#5B085A]"><RotateCcw className="h-3 w-3" /> Reset</button></div>
+              </div>
+
+              <div className="my-5 rounded-2xl border border-[#ECDDEC] bg-gradient-to-r from-[#FBF6FB] to-[#fff9fb] p-4 md:p-5"><div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-center gap-4"><div><span className="block text-[9px] font-extrabold uppercase tracking-[0.18em] text-[#831843]">Size</span><span className="font-playfair text-4xl font-bold text-[#5B085A]">{selectedSize}</span></div><div><span className="block text-[9px] font-extrabold uppercase tracking-wider text-[#831843]">Recommended Fitting Profile</span><span className="mt-1 block text-sm font-bold text-[#1A1528]">True-to-fit {selectedSize === "M" ? "Medium" : selectedSize}</span><span className="mt-1 inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700"><CheckCircle2 className="h-3 w-3" /> AI Fit</span></div></div><div className="text-left sm:text-right"><span className="block text-[9px] font-extrabold uppercase tracking-wider text-slate-400">Silhouette Match</span><span className="mt-1 inline-flex items-center gap-1 text-sm font-bold text-[#1A1528]">{classifyDetails.shape}<CheckCircle2 className="h-4 w-4 text-emerald-500" /></span><button type="button" onClick={() => setIsPoseMode(true)} className="mt-2 flex items-center gap-1 text-[10px] font-bold text-[#5B085A] sm:ml-auto"><Pencil className="h-3 w-3" /> Customize Profile</button></div></div><div className="mt-4 flex flex-wrap gap-1.5">{["XS", "S", "M", "L", "XL"].map((size) => <button key={size} type="button" onClick={() => setSelectedSize(size)} className={`min-w-9 rounded-lg border px-2.5 py-1.5 text-[10px] font-extrabold ${selectedSize === size ? "border-[#5B085A] bg-[#5B085A] text-white" : "border-[#ECDDEC] bg-white text-slate-600 hover:border-[#5B085A]"}`}>{size}</button>)}<span className="ml-auto self-center text-[10px] text-slate-400">AI suggests {recommendedSize}</span></div></div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">{measurementCards.map((measurement) => <div key={measurement.label} className="rounded-2xl border border-[#ECDDEC] bg-white p-4"><div className="flex items-center justify-between"><span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500"><span className="material-symbols-outlined text-base text-[#831843]">{measurement.icon}</span>{measurement.label}</span><Edit3 className="h-3.5 w-3.5 text-slate-300" /></div><div className="mt-3 flex items-end justify-between gap-2"><label className="flex items-baseline gap-1"><input aria-label={measurement.label} type="number" min={measurement.min} value={measurement.value || ""} onChange={(event) => measurement.setValue(Number(event.target.value))} className="w-24 bg-transparent font-playfair text-3xl font-bold text-[#1A1528] outline-none" /><span className="text-[10px] font-bold uppercase text-slate-400">{measurement.unit}</span></label><div className="flex gap-1"><button type="button" aria-label={`Decrease ${measurement.label}`} onClick={() => measurement.setValue(Math.max(measurement.min, measurement.value - 1))} className="rounded-lg border border-[#ECDDEC] p-1.5 text-[#5B085A] hover:bg-[#FBF6FB]"><Minus className="h-3.5 w-3.5" /></button><button type="button" aria-label={`Increase ${measurement.label}`} onClick={() => measurement.setValue(measurement.value + 1)} className="rounded-lg border border-[#ECDDEC] p-1.5 text-[#5B085A] hover:bg-[#FBF6FB]"><Plus className="h-3.5 w-3.5" /></button></div></div></div>)}</div>
+
+              <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-[#ECDDEC] bg-[#FBF6FB] p-4 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-start gap-2.5"><Edit3 className="mt-0.5 h-4 w-4 shrink-0 text-[#5B085A]" /><div><h3 className="text-xs font-bold text-[#1A1528]">Manual Editing Active</h3><p className="mt-1 text-[10px] leading-relaxed text-slate-500">Adjusted dimensions will dynamically adapt pattern rendering and tailoring allowances in Step 3.</p></div></div><button type="button" onClick={saveAdjustments} className="shrink-0 rounded-xl bg-[#5B085A] px-4 py-2 text-[10px] font-extrabold uppercase tracking-wider text-white shadow-sm hover:bg-[#470646]">Save Adjustments</button></div>
+            </section>
+
+            <section className="lg:col-span-5 space-y-4"><div className="rounded-3xl border border-[#ECDDEC] bg-white p-4 shadow-[0_12px_30px_rgba(91,8,90,0.05)] md:p-5"><div className="flex items-center justify-between"><span className="flex items-center gap-2 text-[10px] font-extrabold uppercase tracking-[0.16em] text-[#5B085A]"><span className="h-2 w-2 rounded-full bg-[#5B085A]" /> Shopper Photo</span><span className="font-mono text-[9px] text-slate-400">ID: FA-99283-WL</span></div><div className="relative mt-4 aspect-[2/3] overflow-hidden rounded-2xl border border-[#ECDDEC] bg-[#f8f5f8]">{selectedPhoto ? <img src={selectedPhoto} alt="Uploaded shopper full body" className="h-full w-full object-contain" /> : <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-slate-400"><Upload className="h-8 w-8 text-[#ac2471]" /><span className="text-xs font-bold">Upload a full-body photo in Step 1</span></div>}<span className="absolute left-3 top-3 rounded-full border border-white/70 bg-white/90 px-2.5 py-1 text-[9px] font-bold text-[#1A1528] shadow-sm">Full-Body Detected</span><span className="absolute right-3 top-3 rounded-full border border-white/70 bg-white/90 px-2.5 py-1 text-[9px] font-bold text-[#1A1528] shadow-sm">{Math.round(poseConfidence)}% Scale</span>{poseLoading && <div className="absolute inset-0 flex items-center justify-center bg-white/75"><RefreshCw className="h-6 w-6 animate-spin text-[#5B085A]" /></div>}</div><p className="mt-3 flex items-center gap-1.5 text-xs font-bold text-emerald-700"><CheckCircle2 className="h-4 w-4" /> Photo analyzed successfully</p><div className="mt-2 flex items-center justify-between border-t border-[#f1e8f2] pt-2 text-[10px] text-slate-500"><span>AI sizing calibration complete</span><span>Pose: Standing Neutral</span></div></div><div className="flex items-center justify-between rounded-2xl border border-[#ECDDEC] bg-white px-4 py-3 text-[10px] text-slate-500 shadow-sm"><span>Need a different posture or lighting?</span><label className="inline-flex cursor-pointer items-center gap-1.5 font-extrabold uppercase tracking-wider text-[#5B085A] hover:text-[#470646]"><Upload className="h-3.5 w-3.5" /> Re-upload<input type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} /></label></div></section>
+          </div>
+
+          <div className="mt-5 flex flex-col-reverse items-center justify-between gap-4 sm:flex-row"><button type="button" onClick={() => setCurrentStep(1)} className="inline-flex items-center gap-2 rounded-xl border border-[#ECDDEC] bg-white px-4 py-2.5 text-[10px] font-extrabold uppercase tracking-wider text-[#5B085A] hover:bg-[#FBF6FB]"><ArrowLeft className="h-3.5 w-3.5" /> Back to Theme Selection</button><div className="text-center sm:text-right"><button type="button" onClick={() => setCurrentStep(3)} className="inline-flex items-center gap-2 rounded-full bg-[#5B085A] px-6 py-3 text-[11px] font-extrabold uppercase tracking-[0.12em] text-white shadow-md hover:bg-[#470646] active:scale-[0.98]">Next: Try-On <ArrowRight className="h-4 w-4" /></button><p className="mt-1.5 text-[10px] text-slate-500">Confirm your measurements to continue to virtual try-on.</p></div></div>
+        </div>
+      </main>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-[#fffbfc] flex flex-col font-sans selection:bg-[#faebf4] selection:text-[#5a005a]">
       
@@ -4465,13 +4604,14 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
 
       {/* 2. Premium Steps Wizard Indicator Progress Bar */}
       <div className="bg-[#fdfafc] border-b border-[#f3e9f0] py-4 px-6 md:px-12 shrink-0">
-        <div className="max-w-5xl mx-auto w-full grid grid-cols-5 gap-2 md:gap-4 select-none">
+        <div className="max-w-6xl mx-auto w-full grid grid-cols-6 gap-2 md:gap-4 select-none">
           {[
             { step: 1, label: "Upload & Occasion", desc: "Selected: " + chosenOccasion },
-            { step: 2, label: "Sizing & Try-On", desc: "Active calibration" },
-            { step: 3, label: "Create Order", desc: "Custom breakdown" },
-            { step: 4, label: "Secure Payment", desc: "Sandbox gateway" },
-            { step: 5, label: "Get Receipt & PDF", desc: "Stylist dossier" }
+            { step: 2, label: "Size", desc: "Active calibration" },
+            { step: 3, label: "Virtual Try-On", desc: "AI fitting preview" },
+            { step: 4, label: "Create Order", desc: "Custom breakdown" },
+            { step: 5, label: "Secure Payment", desc: "Sandbox gateway" },
+            { step: 6, label: "Get Receipt & PDF", desc: "Stylist dossier" }
           ].map((item) => {
             const isCompleted = currentStep > item.step;
             const isActive = currentStep === item.step;
@@ -4485,7 +4625,7 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
                     setCurrentStep(item.step);
                   } else if (item.step === 2 && currentStep === 1) {
                     setCurrentStep(2);
-                  } else if (item.step === 3 && currentStep === 2 && selectedOutfit.top) {
+                  } else if (item.step === 3 && currentStep === 2) {
                     setCurrentStep(3);
                   } else if (item.step === 4 && currentStep === 3) {
                     setCurrentStep(4);
@@ -4521,10 +4661,13 @@ export default function ShopperStudioView({ products, currentUser, onLogout, onD
       {/* Conditionally render secondary views based on currentStep */}
       {currentStep === 1 && renderStep1()}
       {currentStep === 3 && renderStep3()}
-      {currentStep === 4 && renderStep4()}
-      {currentStep === 5 && renderStep5()}
+      {currentStep === 4 && renderCreateOrder()}
+      {currentStep === 5 && renderPayment()}
+      {currentStep === 6 && renderReceipt()}
 
-      {currentStep === 2 && (
+      {currentStep === 2 && renderStep2()}
+
+      {false && currentStep === 2 && (
         <main className="flex-grow grid grid-cols-1 lg:grid-cols-12 gap-8 p-6 md:p-10 max-w-7xl mx-auto w-full overflow-hidden">
         
         {/* LEFT COLUMN (visually swapped to right side): Interactive Fitting (5 cols) */}

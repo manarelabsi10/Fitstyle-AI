@@ -17,8 +17,7 @@ import {
 } from "lucide-react";
 import { Product, UserProfile } from "../types";
 import MyLooksPage from "./MyLooksPage";
-import TrendingPage from "./TrendingPage";
-import WardrobePage from "./WardrobePage";
+import ProductCartPage, { CartItem } from "./ProductCartPage";
 import fitStyleLogo from "../assets/images/fitstyle_ai_logo_1780811765736.png";
 import featuredWeddingDress from "../assets/images/wedding.jpeg";
 
@@ -27,12 +26,17 @@ interface LandingPageProps {
   currentUser: UserProfile | null;
   onLogout: () => void;
   onDeleteAccount?: () => void;
-  activeView: "home" | "trending" | "my-looks" | "wardrobe";
-  setActiveView: (view: "home" | "trending" | "my-looks" | "wardrobe") => void;
+  activeView: "home" | "my-looks" | "cart";
+  setActiveView: (view: "home" | "my-looks" | "cart") => void;
   onSignIn: (message?: string, redirectTarget?: string) => void;
   onAdminSignIn?: () => void;
   onEnterFittingStudio: () => void;
   setInitialOutfit: (outfit: any) => void;
+  cartItems: CartItem[];
+  onOpenCart: () => void;
+  onProceedToPayment: () => void;
+  onUpdateCartQuantity: (productId: string, quantity: number) => void;
+  onRemoveCartItem: (productId: string) => void;
 }
 
 export default function LandingPage({ 
@@ -45,7 +49,12 @@ export default function LandingPage({
   onSignIn, 
   onAdminSignIn,
   onEnterFittingStudio,
-  setInitialOutfit
+  setInitialOutfit,
+  cartItems,
+  onOpenCart,
+  onProceedToPayment,
+  onUpdateCartQuantity,
+  onRemoveCartItem
 }: LandingPageProps) {
   const [showDropdown, setShowDropdown] = useState(false);
   const [settingsActive, setSettingsActive] = useState(false);
@@ -61,18 +70,6 @@ export default function LandingPage({
       onSignIn("Sign in to view your saved looks", "my-looks");
     } else {
       setActiveView("my-looks");
-    }
-  };
-
-  const handleTrendingClick = () => {
-    setActiveView("trending");
-  };
-
-  const handleWardrobeClick = () => {
-    if (!currentUser) {
-      onSignIn("Sign in to access your personal wardrobe", "wardrobe");
-    } else {
-      setActiveView("wardrobe");
     }
   };
 
@@ -134,36 +131,21 @@ export default function LandingPage({
             >
               My Looks
             </button>
-            <button 
-              onClick={handleTrendingClick}
-              className={`font-medium transition-colors cursor-pointer hover:text-purple-700 ${
-                activeView === "trending" 
-                  ? "text-purple-900 border-b-2 border-purple-800 font-semibold" 
-                  : "text-zinc-500"
-              }`}
-            >
-              Trending
-            </button>
-            <button 
-              onClick={handleWardrobeClick}
-              className={`font-medium transition-colors cursor-pointer hover:text-purple-700 ${
-                activeView === "wardrobe" 
-                  ? "text-purple-900 border-b-2 border-purple-800 font-semibold" 
-                  : "text-zinc-500"
-              }`}
-            >
-              Wardrobe
-            </button>
           </div>
 
           {/* Header Action Items */}
           <div className="flex items-center gap-4">
             <button 
-              onClick={handleStartTransformation}
-              className="p-2 text-purple-900 hover:opacity-80 transition-opacity cursor-pointer relative"
-              title="Virtual Fitting Studio"
+              onClick={onOpenCart}
+              className={`relative rounded-xl p-2 transition-opacity hover:bg-purple-50 hover:opacity-80 cursor-pointer ${activeView === "cart" ? "bg-purple-50 text-purple-950" : "text-purple-900"}`}
+              title="Product Cart"
             >
               <ShoppingBag className="w-6 h-6" />
+              {cartItems.length > 0 && (
+                <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-purple-900 px-1 text-[9px] font-bold text-white">
+                  {cartItems.reduce((total, item) => total + item.quantity, 0)}
+                </span>
+              )}
             </button>
             
             {currentUser ? (
@@ -201,16 +183,6 @@ export default function LandingPage({
                       className="w-full text-left px-4 py-2 hover:bg-purple-50 text-xs font-semibold text-slate-700 hover:text-purple-950 flex items-center gap-2 cursor-pointer"
                     >
                       🌱 My Looks
-                    </button>
-
-                    <button
-                      onClick={() => {
-                        setActiveView("wardrobe");
-                        setShowDropdown(false);
-                      }}
-                      className="w-full text-left px-4 py-2 hover:bg-purple-50 text-xs font-semibold text-slate-700 hover:text-purple-950 flex items-center gap-2 cursor-pointer"
-                    >
-                      👔 Wardrobe
                     </button>
 
                     <button
@@ -274,6 +246,16 @@ export default function LandingPage({
 
       {/* Main Content Area */}
       <main>
+        {activeView === "cart" && (
+          <ProductCartPage
+            cartItems={cartItems}
+            onUpdateQuantity={onUpdateCartQuantity}
+            onRemoveItem={onRemoveCartItem}
+            onContinueShopping={() => setActiveView("home")}
+            onProceedToPayment={onProceedToPayment}
+          />
+        )}
+
         {activeView === "home" && (
           <>
             {/* Hero Section */}
@@ -296,12 +278,6 @@ export default function LandingPage({
                       className="hero-gradient text-white px-10 py-4 rounded-full font-sans text-sm font-semibold shadow-lg shadow-purple-900/20 hover:scale-105 transition-transform cursor-pointer"
                     >
                       Start Your Transformation
-                    </button>
-                    <button 
-                      onClick={handleTrendingClick}
-                      className="border-2 border-purple-900 text-purple-900 px-10 py-4 rounded-full font-sans text-sm font-semibold hover:bg-purple-900/5 transition-colors cursor-pointer"
-                    >
-                      View Collections
                     </button>
                   </div>
                 </div>
@@ -400,20 +376,7 @@ export default function LandingPage({
                     </div>
                   </div>
 
-                  {/* Digital Wardrobe Sync Block */}
-                  <div className="md:col-span-2 bg-[#5a005a] text-white p-10 rounded-xl flex flex-col justify-center shadow-md relative overflow-hidden group">
-                    <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full blur-2xl pointer-events-none -mr-12 -mt-12" />
-                    <h4 className="font-serif text-3xl font-semibold mb-4 text-purple-100">Smart Wardrobe Sync</h4>
-                    <p className="font-sans text-base mb-6 opacity-90 leading-relaxed text-purple-200">
-                      Integrate your current closet and let FitStyle AI suggest new ways to wear what you already own. Customize wardrobe presets and calibrate silhouette fittings beautifully.
-                    </p>
-                    <button 
-                      onClick={handleWardrobeClick}
-                      className="text-[#ffd7f5] font-sans text-sm font-bold flex items-center gap-2 hover:gap-4 transition-all w-fit uppercase tracking-widest cursor-pointer text-left"
-                    >
-                      LEARN MORE <ArrowRight className="w-4 h-4" />
-                    </button>
-                  </div>
+                
 
                   {/* Stat Block 1 */}
                   <div className="bg-white rounded-xl overflow-hidden shadow-lg p-6 flex flex-col items-center justify-center text-center">
@@ -458,19 +421,8 @@ export default function LandingPage({
           </>
         )}
 
-        {/* Dynamic Pages */}
-        {activeView === "trending" && (
-          <TrendingPage 
-            products={products}
-            currentUser={currentUser}
-            onSignInRequired={onSignIn}
-            onTryOutfit={(outfit) => {
-              setInitialOutfit(outfit);
-              onEnterFittingStudio();
-            }}
-          />
-        )}
 
+        {/* Dynamic Pages */}
         {activeView === "my-looks" && (
           currentUser ? (
             <MyLooksPage 
@@ -487,22 +439,6 @@ export default function LandingPage({
           )
         )}
 
-        {activeView === "wardrobe" && (
-          currentUser ? (
-            <WardrobePage 
-              products={products}
-              uid={currentUser.uid}
-              onNavigateToStudio={(outfit) => {
-                if (outfit) setInitialOutfit(outfit);
-                onEnterFittingStudio();
-              }}
-            />
-          ) : (
-            <div className="py-20 text-center">
-              <p className="text-sm font-bold text-red-600">Authentication is required to access your wardrobe.</p>
-            </div>
-          )
-        )}
       </main>
 
       {/* Settings Modal (Placeholder as requested) */}
